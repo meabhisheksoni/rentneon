@@ -75,7 +75,13 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
     try {
       const month = selectedMonth.getMonth() + 1
       const year = selectedMonth.getFullYear()
-      
+
+      // Ensure all required values exist before making the API call
+      if (!renter.id || month === undefined || year === undefined) {
+        console.error('Missing required values:', { renterId: renter.id, month, year })
+        return
+      }
+
       // Try to load existing bill for this month
       const existingBill = await SupabaseService.getMonthlyBill(renter.id, month, year)
       
@@ -220,7 +226,13 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
     try {
       const month = selectedMonth.getMonth() + 1
       const year = selectedMonth.getFullYear()
-      
+
+      // Ensure renter.id exists before proceeding
+      if (!renter.id) {
+        alert('Error: Renter ID is missing. Cannot save bill.')
+        return
+      }
+
       // Prepare monthly bill data
       const monthlyBill: MonthlyBill = {
         renter_id: renter.id,
