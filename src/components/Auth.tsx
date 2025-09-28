@@ -53,10 +53,27 @@ export default function Auth() {
     checkBiometricAvailability()
     
     // Auto-login if enabled and device is trusted
-    if (autoLogin === 'true' && trustedDevice === 'true' && savedEmail) {
-      handleAutoLogin()
+    const performAutoLogin = async () => {
+      if (autoLogin === 'true' && trustedDevice === 'true' && savedEmail) {
+        const savedPassword = localStorage.getItem('rememberedPassword')
+        const lastLoginTime = localStorage.getItem('lastLoginTime')
+        
+        // Auto-login only if last login was within 7 days
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000)
+        
+        if (savedEmail && savedPassword && lastLoginTime && parseInt(lastLoginTime) > sevenDaysAgo) {
+          setLoading(true)
+          const { error } = await signIn(savedEmail, savedPassword)
+          if (error) {
+            console.log('Auto-login failed:', error.message)
+            setLoading(false)
+          }
+        }
+      }
     }
-  }, [])
+    
+    performAutoLogin()
+  }, [signIn])
 
   const checkBiometricAvailability = async () => {
     try {
@@ -64,7 +81,7 @@ export default function Auth() {
           await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()) {
         setBiometricAvailable(true)
       }
-    } catch (error) {
+    } catch {
       console.log('Biometric authentication not available')
     }
   }
@@ -86,7 +103,7 @@ export default function Auth() {
           setLoading(false)
         }
       }
-    } catch (error) {
+    } catch {
       console.log('Auto-login failed')
       setLoading(false)
     }
@@ -125,7 +142,7 @@ export default function Auth() {
           setTimeout(() => setShowBiometricSetup(true), 1000)
         }
       }
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred')
     } finally {
       setLoading(false)
@@ -149,7 +166,7 @@ export default function Auth() {
       } else {
         setError('Invalid MPIN')
       }
-    } catch (err) {
+    } catch {
       setError('MPIN authentication failed')
     } finally {
       setLoading(false)
@@ -205,7 +222,7 @@ export default function Auth() {
         setShowBiometricSetup(false)
         alert('Biometric authentication set up successfully!')
       }
-    } catch (error) {
+    } catch {
       setError('Failed to set up biometric authentication')
     }
   }
@@ -245,7 +262,7 @@ export default function Auth() {
           }
         }
       }
-    } catch (error) {
+    } catch {
       setError('Biometric authentication failed')
     } finally {
       setLoading(false)

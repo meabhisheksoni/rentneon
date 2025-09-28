@@ -8,7 +8,7 @@ export const formatIndianNumber = (num: number): string => {
   
   // Handle decimal places
   const parts = numStr.split('.')
-  let integerPart = parts[0]
+  const integerPart = parts[0]
   const decimalPart = parts[1] ? '.' + parts[1] : ''
   
   // Indian numbering system: 12,34,56,789
