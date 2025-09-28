@@ -160,7 +160,7 @@ export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModa
         {/* Info Note */}
         <div className="mt-6 p-4 bg-blue-50 rounded-2xl">
           <p className="text-sm text-blue-700 font-medium">
-            <span className="font-bold">Note:</span> You can add more details like contact information and property address later from the renter's profile.
+            <span className="font-bold">Note:</span> You can add more details like contact information and property address later from the renter&apos;s profile.
           </p>
         </div>
       </div>

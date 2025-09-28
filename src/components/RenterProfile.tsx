@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { format } from 'date-fns'
 import { ArrowLeft, ChevronLeft, ChevronRight, Copy, Calculator, Send, Zap, Droplets, Settings, Home, Plus, X } from 'lucide-react'
 import { Renter } from '@/types'
-import { SupabaseService, MonthlyBill, AdditionalExpense, BillPayment } from '@/services/supabaseService'
+import { SupabaseService, MonthlyBill, AdditionalExpense as ServiceAdditionalExpense, BillPayment } from '@/services/supabaseService'
 import { formatIndianCurrency, formatInputValue, handleIndianNumberInput } from '@/utils/formatters'
 
 interface RenterProfileProps {
@@ -84,17 +84,17 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
         setRentAmount(existingBill.rent_amount)
         setElectricityEnabled(existingBill.electricity_enabled)
         setElectricityData({
-          initialReading: existingBill.electricity_initial_reading,
-          finalReading: existingBill.electricity_final_reading,
-          multiplier: existingBill.electricity_multiplier,
+          initialReading: existingBill.electricity_initial_reading || 0,
+          finalReading: existingBill.electricity_final_reading || 0,
+          multiplier: existingBill.electricity_multiplier || 9,
           readingDate: existingBill.electricity_reading_date ? new Date(existingBill.electricity_reading_date) : new Date()
         })
         setMotorEnabled(existingBill.motor_enabled)
         setMotorData({
-          initialReading: existingBill.motor_initial_reading,
-          finalReading: existingBill.motor_final_reading,
-          multiplier: existingBill.motor_multiplier,
-          numberOfPeople: existingBill.motor_number_of_people,
+          initialReading: existingBill.motor_initial_reading || 0,
+          finalReading: existingBill.motor_final_reading || 0,
+          multiplier: existingBill.motor_multiplier || 9,
+          numberOfPeople: existingBill.motor_number_of_people || 2,
           readingDate: existingBill.motor_reading_date ? new Date(existingBill.motor_reading_date) : new Date()
         })
         setWaterEnabled(existingBill.water_enabled)
@@ -226,32 +226,32 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
         renter_id: renter.id,
         month,
         year,
-        rent_amount: rentAmount,
+        rent_amount: rentAmount || 0,
         
-        electricity_enabled: electricityEnabled,
-        electricity_initial_reading: electricityData.initialReading,
-        electricity_final_reading: electricityData.finalReading,
-        electricity_multiplier: electricityData.multiplier,
-        electricity_reading_date: electricityData.readingDate.toISOString().split('T')[0],
-        electricity_amount: electricityAmount,
+        electricity_enabled: electricityEnabled || false,
+        electricity_initial_reading: electricityData.initialReading || 0,
+        electricity_final_reading: electricityData.finalReading || 0,
+        electricity_multiplier: electricityData.multiplier || 9,
+        electricity_reading_date: electricityData.readingDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
+        electricity_amount: electricityAmount || 0,
         
-        motor_enabled: motorEnabled,
-        motor_initial_reading: motorData.initialReading,
-        motor_final_reading: motorData.finalReading,
-        motor_multiplier: motorData.multiplier,
-        motor_number_of_people: motorData.numberOfPeople,
-        motor_reading_date: motorData.readingDate.toISOString().split('T')[0],
-        motor_amount: motorAmount,
+        motor_enabled: motorEnabled || false,
+        motor_initial_reading: motorData.initialReading || 0,
+        motor_final_reading: motorData.finalReading || 0,
+        motor_multiplier: motorData.multiplier || 9,
+        motor_number_of_people: motorData.numberOfPeople || 2,
+        motor_reading_date: motorData.readingDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
+        motor_amount: motorAmount || 0,
         
-        water_enabled: waterEnabled,
-        water_amount: waterAmount,
+        water_enabled: waterEnabled || false,
+        water_amount: waterAmount || 0,
         
-        maintenance_enabled: maintenanceEnabled,
-        maintenance_amount: maintenanceAmount,
+        maintenance_enabled: maintenanceEnabled || false,
+        maintenance_amount: maintenanceAmount || 0,
         
-        total_amount: totalAmount,
-        total_payments: totalPayments,
-        pending_amount: pendingAmount
+        total_amount: totalAmount || 0,
+        total_payments: totalPayments || 0,
+        pending_amount: pendingAmount || 0
       }
       
       // Save monthly bill
@@ -409,7 +409,7 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
                 <div className="text-green-300">- RS {Math.floor(totalPayments).toLocaleString('en-IN')} already given</div>
               )}
               
-              <div className="font-bold text-red-400 text-sm">Pending ;- Rs {Math.floor(pendingAmount).toLocaleString('en-IN')}"</div>
+              <div className="font-bold text-red-400 text-sm">Pending ;- Rs {Math.floor(pendingAmount).toLocaleString('en-IN')}&quot;</div>
             </div>
           </div>
 

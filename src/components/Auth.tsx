@@ -26,7 +26,7 @@ export default function Auth() {
   
   // Auto-login functionality
   const [autoLoginEnabled, setAutoLoginEnabled] = useState(false)
-  const [deviceTrusted, setDeviceTrusted] = useState(false)
+  // const [deviceTrusted, setDeviceTrusted] = useState(false)
 
   const { signIn, signUp } = useAuth()
 
@@ -48,7 +48,6 @@ export default function Auth() {
     
     setBiometricEnabled(biometricSetup === 'true')
     setAutoLoginEnabled(autoLogin === 'true')
-    setDeviceTrusted(trustedDevice === 'true')
     
     // Check if biometric authentication is available
     checkBiometricAvailability()
@@ -258,7 +257,6 @@ export default function Auth() {
     localStorage.setItem('deviceTrusted', 'true')
     localStorage.setItem('lastLoginTime', Date.now().toString())
     setAutoLoginEnabled(true)
-    setDeviceTrusted(true)
     alert('Auto-login enabled for this device!')
   }
 
@@ -276,7 +274,6 @@ export default function Auth() {
     setShowMPIN(false)
     setBiometricEnabled(false)
     setAutoLoginEnabled(false)
-    setDeviceTrusted(false)
     setEmail('')
     setMpin('')
     setError('')
