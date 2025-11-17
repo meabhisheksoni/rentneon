@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { format } from 'date-fns'
 import { Calendar, Home, Users, IndianRupee, Receipt, Plus, Menu, LogOut, User, Archive } from 'lucide-react'
 import { SupabaseService } from '@/services/supabaseService'
@@ -24,11 +24,7 @@ export default function Dashboard() {
   const [viewMode, setViewMode] = useState<'active' | 'archived' | 'all'>('active')
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadDashboardData()
-  }, [testDate])
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     setIsLoading(true)
     setLoadError(null)
     try {
@@ -51,7 +47,11 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [testDate])
+
+  useEffect(() => {
+    loadDashboardData()
+  }, [loadDashboardData])
 
   const handleRenterAdded = () => {
     setShowAddModal(false)

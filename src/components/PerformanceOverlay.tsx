@@ -22,11 +22,10 @@ export default function PerformanceOverlay() {
   // Only show in development mode
   const isDevelopment = process.env.NODE_ENV === 'development'
 
-  // Don't render in production
-  if (!isDevelopment) return null
-
   // Keyboard shortcut to toggle visibility (Ctrl+Shift+P)
   useEffect(() => {
+    if (!isDevelopment) return
+
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key === 'P') {
         setIsVisible(prev => !prev)
@@ -35,9 +34,11 @@ export default function PerformanceOverlay() {
 
     window.addEventListener('keydown', handleKeyPress)
     return () => window.removeEventListener('keydown', handleKeyPress)
-  }, [])
+  }, [isDevelopment])
 
   useEffect(() => {
+    if (!isDevelopment) return
+
     // Update metrics every 2 seconds
     const interval = setInterval(() => {
       setSummary(performanceMonitor.getSummary())
@@ -45,7 +46,9 @@ export default function PerformanceOverlay() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [])
+  }, [isDevelopment])
+
+  if (!isDevelopment) return null
 
   if (!isVisible) {
     return (

@@ -307,7 +307,15 @@ export class PerformanceDiagnostic {
 
 // Export for console use
 if (typeof window !== 'undefined') {
-  (window as any).runPerformanceDiagnostic = PerformanceDiagnostic.runDiagnostic
-  (window as any).testBillQuery = PerformanceDiagnostic.testBillQueryPerformance
-  (window as any).getQuickFix = PerformanceDiagnostic.getQuickFixInstructions
+  type DiagnosticWindow = typeof window & {
+    runPerformanceDiagnostic: () => Promise<DatabaseDiagnostic>
+    testBillQuery: () => ReturnType<typeof PerformanceDiagnostic.testBillQueryPerformance>
+    getQuickFix: () => string[]
+  }
+
+  const diagnosticWindow = window as DiagnosticWindow
+
+  diagnosticWindow.runPerformanceDiagnostic = () => PerformanceDiagnostic.runDiagnostic()
+  diagnosticWindow.testBillQuery = () => PerformanceDiagnostic.testBillQueryPerformance()
+  diagnosticWindow.getQuickFix = () => PerformanceDiagnostic.getQuickFixInstructions()
 }

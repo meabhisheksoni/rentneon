@@ -126,7 +126,7 @@ export default function TestRunner() {
             <h3 className="font-medium text-gray-900 mb-2">Instructions:</h3>
             <ol className="list-decimal list-inside space-y-1 text-sm text-gray-600">
               <li>Select a test suite from the options above</li>
-              <li>Click "Run Tests" to start the test execution</li>
+              <li>Click &quot;Run Tests&quot; to start the test execution</li>
               <li>Open the browser console (F12) to see detailed test results</li>
               <li>Tests will validate RPC functions, caching, error handling, and performance</li>
             </ol>
