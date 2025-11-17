@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { Renter, Payment } from '@/types'
+import { trackQueryPerformance } from '@/utils/performanceMonitor'
 
 export interface MonthlyBill {
   id?: string
@@ -60,6 +61,76 @@ export interface BillPayment {
   payment_type: 'cash' | 'online'
   note?: string
   created_at?: string
+}
+
+export interface BillWithDetails {
+  bill: MonthlyBill | null
+  expenses: AdditionalExpense[]
+  payments: BillPayment[]
+  previous_readings: {
+    electricity_final: number
+    motor_final: number
+  }
+}
+
+export interface SaveBillResult {
+  bill_id: string
+  expense_ids: string[]
+  payment_ids: string[]
+  success: boolean
+}
+
+export interface DashboardSummary {
+  active_renters: Renter[]
+  archived_renters: Renter[]
+  metrics: {
+    total_renters: number
+    total_monthly_rent: number
+    pending_amount: number
+  }
+}
+
+// Retry logic with exponential backoff
+class RetryableQuery {
+  private maxRetries = 2
+  private baseDelay = 1000 // 1 second
+  
+  async execute<T>(
+    queryFn: () => Promise<T>,
+    context: string
+  ): Promise<T> {
+    let lastError: Error
+    
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        return await queryFn()
+      } catch (error) {
+        lastError = error as Error
+        
+        if (attempt < this.maxRetries) {
+          // Exponential backoff
+          const delay = this.baseDelay * Math.pow(2, attempt)
+          console.warn(`${context} failed, retrying in ${delay}ms...`, error)
+          await new Promise(resolve => setTimeout(resolve, delay))
+        }
+      }
+    }
+    
+    throw new Error(`${context} failed after ${this.maxRetries} retries: ${lastError!.message}`)
+  }
+}
+
+// Timeout handling for database queries
+async function queryWithTimeout<T>(
+  queryFn: () => Promise<T>,
+  timeoutMs: number = 5000
+): Promise<T> {
+  return Promise.race([
+    queryFn(),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error('Query timeout - operation took longer than expected')), timeoutMs)
+    )
+  ])
 }
 
 export class SupabaseService {
@@ -338,9 +409,12 @@ export class SupabaseService {
         .eq('user_id', user.id)
         .eq('month', month)
         .eq('year', year)
-        .single()
+        .maybeSingle()
 
-      if (error && error.code !== 'PGRST116') throw error // PGRST116 = no rows returned
+      if (error) {
+        console.error('Error fetching monthly bill:', error)
+        return null
+      }
       return data || null
     } catch (error) {
       console.error('Error fetching monthly bill:', error)
@@ -492,7 +566,210 @@ export class SupabaseService {
     }
   }
 
-  // Test connection
+  // Optimized methods using RPC functions
+  
+  /**
+   * Fetches complete bill data including expenses and payments in a single RPC call
+   * Falls back to parallel queries if RPC function is not available
+   */
+  static async getBillWithDetails(
+    renterId: number,
+    month: number,
+    year: number
+  ): Promise<BillWithDetails | null> {
+    return trackQueryPerformance(
+      'getBillWithDetails',
+      async () => {
+        const retryableQuery = new RetryableQuery()
+        
+        try {
+          return await retryableQuery.execute(async () => {
+            return await queryWithTimeout(async () => {
+              const { data: { user } } = await supabase.auth.getUser()
+              if (!user) throw new Error('User not authenticated')
+
+              // Try the optimized RPC function first
+              try {
+                const { data, error } = await supabase.rpc('get_bill_with_details', {
+                  p_renter_id: renterId,
+                  p_month: month,
+                  p_year: year,
+                  p_user_id: user.id
+                })
+
+                if (error) {
+                  console.warn('RPC function not available, falling back to parallel queries:', error.message)
+                  throw error
+                }
+                
+                // Handle null response for new months gracefully
+                if (!data) {
+                  return {
+                    bill: null,
+                    expenses: [],
+                    payments: [],
+                    previous_readings: {
+                      electricity_final: 0,
+                      motor_final: 0
+                    }
+                  }
+                }
+                
+                return data as BillWithDetails
+              } catch (rpcError) {
+                // Fallback to parallel queries for better performance than sequential
+                console.log('Using parallel query fallback for better performance')
+                
+                const [bill, previousBill] = await Promise.all([
+                  this.getMonthlyBill(renterId, month, year),
+                  this.getPreviousMonthBill(renterId, month, year)
+                ])
+
+                if (!bill) {
+                  return {
+                    bill: null,
+                    expenses: [],
+                    payments: [],
+                    previous_readings: {
+                      electricity_final: previousBill?.electricity_final_reading || 0,
+                      motor_final: previousBill?.motor_final_reading || 0
+                    }
+                  }
+                }
+
+                // Fetch expenses and payments in parallel
+                const [expenses, payments] = await Promise.all([
+                  this.getAdditionalExpenses(bill.id!),
+                  this.getBillPayments(bill.id!)
+                ])
+
+                return {
+                  bill,
+                  expenses,
+                  payments,
+                  previous_readings: {
+                    electricity_final: previousBill?.electricity_final_reading || 0,
+                    motor_final: previousBill?.motor_final_reading || 0
+                  }
+                }
+              }
+            }, 5000)
+          }, 'getBillWithDetails')
+        } catch (error) {
+          console.error('Error fetching bill with details:', error)
+          throw new Error(`Failed to fetch bill details: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      },
+      { renterId, month, year }
+    )
+  }
+
+  /**
+   * Saves bill data, expenses, and payments in a single batch operation
+   * Returns generated IDs for cache updates
+   */
+  static async saveBillComplete(
+    billData: MonthlyBill,
+    expenses: AdditionalExpense[],
+    payments: BillPayment[]
+  ): Promise<SaveBillResult> {
+    return trackQueryPerformance(
+      'saveBillComplete',
+      async () => {
+        const retryableQuery = new RetryableQuery()
+        
+        try {
+          return await retryableQuery.execute(async () => {
+            return await queryWithTimeout(async () => {
+              const { data: { user } } = await supabase.auth.getUser()
+              if (!user) throw new Error('User not authenticated')
+
+              const { data, error } = await supabase.rpc('save_bill_complete', {
+                p_bill_data: billData,
+                p_expenses: expenses,
+                p_payments: payments,
+                p_user_id: user.id
+              })
+
+              if (error) throw error
+              
+              if (!data) {
+                throw new Error('No data returned from save operation')
+              }
+              
+              return data as SaveBillResult
+            }, 5000)
+          }, 'saveBillComplete')
+        } catch (error) {
+          console.error('Error saving bill complete:', error)
+          throw new Error(`Failed to save bill: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      },
+      { 
+        renterId: billData.renter_id,
+        month: billData.month,
+        year: billData.year,
+        expenseCount: expenses.length,
+        paymentCount: payments.length
+      }
+    )
+  }
+
+  /**
+   * Fetches all dashboard metrics in a single query with server-side aggregation
+   * Replaces separate queries for renters, rent total, and pending amount
+   */
+  static async getDashboardSummary(
+    referenceDate?: Date
+  ): Promise<DashboardSummary> {
+    return trackQueryPerformance(
+      'getDashboardSummary',
+      async () => {
+        const retryableQuery = new RetryableQuery()
+        
+        try {
+          return await retryableQuery.execute(async () => {
+            return await queryWithTimeout(async () => {
+              const { data: { user } } = await supabase.auth.getUser()
+              if (!user) throw new Error('User not authenticated')
+
+              const dateStr = referenceDate 
+                ? referenceDate.toISOString().split('T')[0]
+                : new Date().toISOString().split('T')[0]
+
+              const { data, error } = await supabase.rpc('get_dashboard_summary', {
+                p_user_id: user.id,
+                p_reference_date: dateStr
+              })
+
+              if (error) throw error
+              
+              if (!data) {
+                // Return empty dashboard if no data
+                return {
+                  active_renters: [],
+                  archived_renters: [],
+                  metrics: {
+                    total_renters: 0,
+                    total_monthly_rent: 0,
+                    pending_amount: 0
+                  }
+                }
+              }
+              
+              return data as DashboardSummary
+            }, 5000)
+          }, 'getDashboardSummary')
+        } catch (error) {
+          console.error('Error fetching dashboard summary:', error)
+          throw new Error(`Failed to fetch dashboard summary: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      },
+      { referenceDate: referenceDate?.toISOString() }
+    )
+  }
+
+  // Test connection and RPC functions
   static async testConnection(): Promise<void> {
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -506,6 +783,20 @@ export class SupabaseService {
 
       if (error) throw error
       console.log('✅ Connection successful!')
+
+      // Test if RPC functions are available
+      try {
+        await supabase.rpc('get_bill_with_details', {
+          p_renter_id: 1,
+          p_month: 1,
+          p_year: 2025,
+          p_user_id: user.id
+        })
+        console.log('✅ RPC functions are available - using optimized queries')
+      } catch (rpcError) {
+        console.warn('⚠️ RPC functions not available - using fallback queries. Deploy database-performance-optimization.sql to fix this.')
+        console.warn('RPC Error:', rpcError)
+      }
     } catch (error) {
       console.error('❌ Connection failed:', error)
     }

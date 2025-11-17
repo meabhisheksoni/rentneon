@@ -1,15 +1,20 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { format } from 'date-fns'
-import { ArrowLeft, ChevronLeft, ChevronRight, Copy, Calculator, Send, Zap, Droplets, Settings, Home, Plus, X } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, Copy, Calculator, Send, Zap, Droplets, Settings, Home, Plus, X, Archive, Trash2, Eye, EyeOff } from 'lucide-react'
 import { Renter } from '@/types'
-import { SupabaseService, MonthlyBill, AdditionalExpense as ServiceAdditionalExpense, BillPayment } from '@/services/supabaseService'
+import { SupabaseService, MonthlyBill } from '@/services/supabaseService'
 import { formatIndianCurrency, formatInputValue, handleIndianNumberInput } from '@/utils/formatters'
+import html2canvas from 'html2canvas'
+import { BillCache, MonthData } from '@/utils/billCache'
 
 interface RenterProfileProps {
   renter: Renter
   onClose: () => void
+  onArchive?: (renterId: string) => void
+  onUnarchive?: (renterId: string) => void
+  onDelete?: (renterId: string) => void
 }
 
 interface Payment {
@@ -27,7 +32,7 @@ interface AdditionalExpense {
   date: Date
 }
 
-export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
+export default function RenterProfile({ renter, onClose, onArchive, onUnarchive, onDelete }: RenterProfileProps) {
   
   // Bill components state - Dynamic based on renter
   const [rentAmount, setRentAmount] = useState(renter.monthly_rent)
@@ -65,119 +70,222 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
 
   const [showAddExpense, setShowAddExpense] = useState(false)
   const [showAddPayment, setShowAddPayment] = useState(false)
+  const [showActions, setShowActions] = useState(false)
+  const [editingExpense, setEditingExpense] = useState<AdditionalExpense | null>(null)
+  const [editingPayment, setEditingPayment] = useState<Payment | null>(null)
+  
+  // Ref for bill summary to capture as image
+  const billSummaryRef = useRef<HTMLDivElement>(null)
   
   // Toggle for bill summary visibility
   const [showBillSummary, setShowBillSummary] = useState(true)
+  
+  // BillCache instance for caching month data
+  const billCacheRef = useRef<BillCache>(new BillCache())
+  
+  // Track if data is stale for UI indication
+  const [isDataStale, setIsDataStale] = useState(false)
+  
+  // Track saving state for optimistic UI
+  const [isSaving, setIsSaving] = useState(false)
+  
+  // Track loading state for better UX
+  const [isLoading, setIsLoading] = useState(false)
 
-  // Load bill data when component mounts and when month changes
+  // Load bill data when component mounts
   useEffect(() => {
     if (renter.id) {
+      // Load current month immediately
       loadMonthlyBillData()
     }
-  }, [selectedMonth, renter.id])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renter.id])
 
-  // Separate effect to load data when component mounts
+  // When month changes, use cache-first strategy with loading state
   useEffect(() => {
-    if (renter.id) {
-      loadMonthlyBillData()
-    }
-  }, [])
-
-  const loadMonthlyBillData = async () => {
-    try {
+    if (renter.id && selectedMonth) {
       const month = selectedMonth.getMonth() + 1
       const year = selectedMonth.getFullYear()
+      const billCache = billCacheRef.current
+      
+      // Check cache first - instant display
+      const cached = billCache.get(renter.id, month, year)
+      if (cached) {
+        // Apply immediately - synchronous, no delay
+        applyMonthData(cached)
+        
+        // Check if data is stale
+        const stale = billCache.isStale(renter.id, month, year)
+        setIsDataStale(stale)
+        
+        // If stale, reload in background
+        if (stale) {
+          loadMonthlyBillData().then(() => {
+            setIsDataStale(false)
+          })
+        } else {
+          // Trigger preload of adjacent months
+          billCache.preload(renter.id, month, year, renter.monthly_rent)
+        }
+      } else {
+        // Cache miss - show loading state and load from database
+        setIsDataStale(false)
+        
+        // Show optimistic/skeleton data immediately
+        const optimisticData: MonthData = {
+          rentAmount: renter.monthly_rent,
+          electricityEnabled: false,
+          electricityData: {
+            initialReading: 0,
+            finalReading: 0,
+            multiplier: 9,
+            readingDate: new Date()
+          },
+          motorEnabled: false,
+          motorData: {
+            initialReading: 0,
+            finalReading: 0,
+            multiplier: 9,
+            numberOfPeople: 2,
+            readingDate: new Date()
+          },
+          waterEnabled: false,
+          waterAmount: 0,
+          maintenanceEnabled: false,
+          maintenanceAmount: 0,
+          additionalExpenses: [],
+          payments: []
+        }
+        
+        // Apply optimistic data immediately for instant UI
+        applyMonthData(optimisticData)
+        
+        // Then load real data
+        loadMonthlyBillData()
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth, renter.id])
 
+  const loadMonthlyBillData = async () => {
+    const month = selectedMonth.getMonth() + 1
+    const year = selectedMonth.getFullYear()
+    const billCache = billCacheRef.current
+
+    try {
+      setIsLoading(true)
+      
       // Ensure all required values exist before making the API call
       if (!renter.id || month === undefined || year === undefined) {
         console.error('Missing required values:', { renterId: renter.id, month, year })
         return
       }
 
-      console.log('Loading monthly bill data for:', { renterId: renter.id, month, year })
+      // Use optimized RPC function - single query instead of 3!
+      const billWithDetails = await SupabaseService.getBillWithDetails(renter.id, month, year)
 
-      // Try to load existing bill for this month
-      const existingBill = await SupabaseService.getMonthlyBill(renter.id, month, year)
-      console.log('Existing bill found:', existingBill ? 'Yes' : 'No', existingBill?.id)
+      let billData: MonthData
 
-      if (existingBill) {
-        console.log('Loading existing bill data...')
-        // Load existing data
-        setRentAmount(existingBill.rent_amount)
-        setElectricityEnabled(existingBill.electricity_enabled)
-        setElectricityData({
-          initialReading: existingBill.electricity_initial_reading || 0,
-          finalReading: existingBill.electricity_final_reading || 0,
-          multiplier: existingBill.electricity_multiplier || 9,
-          readingDate: existingBill.electricity_reading_date ? new Date(existingBill.electricity_reading_date) : new Date()
-        })
-        setMotorEnabled(existingBill.motor_enabled)
-        setMotorData({
-          initialReading: existingBill.motor_initial_reading || 0,
-          finalReading: existingBill.motor_final_reading || 0,
-          multiplier: existingBill.motor_multiplier || 9,
-          numberOfPeople: existingBill.motor_number_of_people || 2,
-          readingDate: existingBill.motor_reading_date ? new Date(existingBill.motor_reading_date) : new Date()
-        })
-        setWaterEnabled(existingBill.water_enabled)
-        setWaterAmount(existingBill.water_amount)
-        setMaintenanceEnabled(existingBill.maintenance_enabled)
-        setMaintenanceAmount(existingBill.maintenance_amount)
+      if (billWithDetails?.bill) {
+        // Bill exists - use the data from RPC
+        const existingBill = billWithDetails.bill
 
-        console.log('Loading expenses and payments for bill ID:', existingBill.id)
-        // Load additional expenses and payments
-        const expenses = await SupabaseService.getAdditionalExpenses(existingBill.id!)
-        const billPayments = await SupabaseService.getBillPayments(existingBill.id!)
-
-        console.log('Loaded expenses:', expenses.length)
-        console.log('Loaded payments:', billPayments.length)
-
-        setAdditionalExpenses(expenses.map(exp => ({
-          id: exp.id!,
-          description: exp.description,
-          amount: exp.amount,
-          date: new Date(exp.date)
-        })))
-
-        setPayments(billPayments.map(payment => ({
-          id: payment.id!,
-          amount: payment.amount,
-          date: new Date(payment.payment_date),
-          type: payment.payment_type,
-          note: payment.note
-        })))
+        billData = {
+          rentAmount: existingBill.rent_amount,
+          electricityEnabled: existingBill.electricity_enabled,
+          electricityData: {
+            initialReading: existingBill.electricity_initial_reading || 0,
+            finalReading: existingBill.electricity_final_reading || 0,
+            multiplier: existingBill.electricity_multiplier || 9,
+            readingDate: existingBill.electricity_reading_date ? new Date(existingBill.electricity_reading_date) : new Date()
+          },
+          motorEnabled: existingBill.motor_enabled,
+          motorData: {
+            initialReading: existingBill.motor_initial_reading || 0,
+            finalReading: existingBill.motor_final_reading || 0,
+            multiplier: existingBill.motor_multiplier || 9,
+            numberOfPeople: existingBill.motor_number_of_people || 2,
+            readingDate: existingBill.motor_reading_date ? new Date(existingBill.motor_reading_date) : new Date()
+          },
+          waterEnabled: existingBill.water_enabled,
+          waterAmount: existingBill.water_amount,
+          maintenanceEnabled: existingBill.maintenance_enabled,
+          maintenanceAmount: existingBill.maintenance_amount,
+          additionalExpenses: billWithDetails.expenses.map(exp => ({
+            id: exp.id!,
+            description: exp.description,
+            amount: exp.amount,
+            date: new Date(exp.date)
+          })),
+          payments: billWithDetails.payments.map(payment => ({
+            id: payment.id!,
+            amount: payment.amount,
+            date: new Date(payment.payment_date),
+            type: payment.payment_type,
+            note: payment.note
+          }))
+        }
       } else {
-        console.log('No existing bill found, setting up default values')
-        // Create fresh bill with carry-forward readings
-        const previousBill = await SupabaseService.getPreviousMonthBill(renter.id, month, year)
-
-        setRentAmount(renter.monthly_rent)
-        setElectricityEnabled(false)
-        setElectricityData({
-          initialReading: previousBill?.electricity_final_reading || 0, // Carry forward
-          finalReading: previousBill?.electricity_final_reading || 0,
-          multiplier: 9,
-          readingDate: new Date()
-        })
-        setMotorEnabled(false)
-        setMotorData({
-          initialReading: previousBill?.motor_final_reading || 0, // Carry forward
-          finalReading: previousBill?.motor_final_reading || 0,
-          multiplier: 9,
-          numberOfPeople: 2,
-          readingDate: new Date()
-        })
-        setWaterEnabled(false)
-        setWaterAmount(0)
-        setMaintenanceEnabled(false)
-        setMaintenanceAmount(0)
-        setAdditionalExpenses([])
-        setPayments([])
+        // Create fresh bill with carry-forward readings from RPC
+        billData = {
+          rentAmount: renter.monthly_rent,
+          electricityEnabled: false,
+          electricityData: {
+            initialReading: billWithDetails?.previous_readings?.electricity_final || 0,
+            finalReading: billWithDetails?.previous_readings?.electricity_final || 0,
+            multiplier: 9,
+            readingDate: new Date()
+          },
+          motorEnabled: false,
+          motorData: {
+            initialReading: billWithDetails?.previous_readings?.motor_final || 0,
+            finalReading: billWithDetails?.previous_readings?.motor_final || 0,
+            multiplier: 9,
+            numberOfPeople: 2,
+            readingDate: new Date()
+          },
+          waterEnabled: false,
+          waterAmount: 0,
+          maintenanceEnabled: false,
+          maintenanceAmount: 0,
+          additionalExpenses: [],
+          payments: []
+        }
       }
+
+      // Apply the loaded data to state
+      applyMonthData(billData)
+
+      // Cache the loaded data
+      billCache.set(renter.id, month, year, billData)
+
+      // Trigger preload of adjacent months in background
+      billCache.preload(renter.id, month, year, renter.monthly_rent)
     } catch (error) {
       console.error('Error loading monthly bill data:', error)
+      // Don't cache failed requests to prevent repeated errors
+      return
+    } finally {
+      setIsLoading(false)
     }
   }
+
+  // Apply cached data to state
+  const applyMonthData = (data: MonthData) => {
+    setRentAmount(data.rentAmount)
+    setElectricityEnabled(data.electricityEnabled)
+    setElectricityData(data.electricityData)
+    setMotorEnabled(data.motorEnabled)
+    setMotorData(data.motorData)
+    setWaterEnabled(data.waterEnabled)
+    setWaterAmount(data.waterAmount)
+    setMaintenanceEnabled(data.maintenanceEnabled)
+    setMaintenanceAmount(data.maintenanceAmount)
+    setAdditionalExpenses(data.additionalExpenses)
+    setPayments(data.payments)
+  }
+
+
 
   // Calculations - Memoized for performance
   const electricityAmount = useMemo(() => electricityEnabled
@@ -206,11 +314,13 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
     [totalAmount, totalPayments])
 
   const previousMonth = () => {
-    setSelectedMonth(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() - 1))
+    const newMonth = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() - 1)
+    setSelectedMonth(newMonth)
   }
 
   const nextMonth = () => {
-    setSelectedMonth(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1))
+    const newMonth = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1)
+    setSelectedMonth(newMonth)
   }
 
   const generateBillSummary = () => {
@@ -253,16 +363,38 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
   }
 
   const handleCalculateAndSave = async () => {
+    const month = selectedMonth.getMonth() + 1
+    const year = selectedMonth.getFullYear()
+
+    // Ensure renter.id exists before proceeding
+    if (!renter.id) {
+      alert('Error: Renter ID is missing. Cannot save bill.')
+      return
+    }
+
+    // 1. Show immediate visual feedback (saving indicator)
+    setIsSaving(true)
+
+    // 2. Create optimistic data snapshot
+    const optimisticData: MonthData = {
+      rentAmount,
+      electricityEnabled,
+      electricityData,
+      motorEnabled,
+      motorData,
+      waterEnabled,
+      waterAmount,
+      maintenanceEnabled,
+      maintenanceAmount,
+      additionalExpenses,
+      payments
+    }
+
+    // 3. Update cache with optimistic data immediately
+    const billCache = billCacheRef.current
+    billCache.set(renter.id, month, year, optimisticData)
+
     try {
-      const month = selectedMonth.getMonth() + 1
-      const year = selectedMonth.getFullYear()
-
-      // Ensure renter.id exists before proceeding
-      if (!renter.id) {
-        alert('Error: Renter ID is missing. Cannot save bill.')
-        return
-      }
-
       // Prepare monthly bill data
       const monthlyBill: MonthlyBill = {
         renter_id: renter.id,
@@ -296,65 +428,162 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
         pending_amount: pendingAmount || 0
       }
       
-      // Save monthly bill first
-      const billId = await SupabaseService.saveMonthlyBill(monthlyBill)
-      console.log('Monthly bill saved with ID:', billId)
+      // Prepare expenses and payments for batch save
+      const expensesToSave = additionalExpenses.map(expense => ({
+        id: expense.id,
+        monthly_bill_id: '', // Will be set by RPC function
+        description: expense.description,
+        amount: expense.amount,
+        date: expense.date.toISOString().split('T')[0]
+      }))
 
-      // Save additional expenses - Update existing expenses and save new ones
-      for (const expense of additionalExpenses) {
-        const expenseData = {
-          monthly_bill_id: billId,
-          description: expense.description,
-          amount: expense.amount,
-          date: expense.date.toISOString().split('T')[0]
-        }
+      const paymentsToSave = payments.map(payment => ({
+        id: payment.id,
+        monthly_bill_id: '', // Will be set by RPC function
+        amount: payment.amount,
+        payment_date: payment.date.toISOString().split('T')[0],
+        payment_type: payment.type,
+        note: payment.note
+      }))
 
-        if (expense.id && expense.id.length > 10) { // Check if it's a real database ID (UUID format)
-          // Update existing expense
-          await SupabaseService.updateAdditionalExpense(expense.id, expenseData)
-          console.log('Updated expense with ID:', expense.id)
-        } else {
-          // Save new expense
-          const savedExpenseId = await SupabaseService.saveAdditionalExpense(expenseData)
-          console.log('Saved expense with ID:', savedExpenseId)
-        }
-      }
+      // 4. Save to database in background using batch operation
+      const result = await SupabaseService.saveBillComplete(
+        monthlyBill,
+        expensesToSave,
+        paymentsToSave
+      )
 
-      // Save payments - Update existing payments and save new ones
-      for (const payment of payments) {
-        const paymentData = {
-          monthly_bill_id: billId,
-          amount: payment.amount,
-          payment_date: payment.date.toISOString().split('T')[0],
-          payment_type: payment.type,
-          note: payment.note
-        }
+      // 5. Update local IDs from server response
+      if (result.success) {
+        // Update expense IDs
+        const updatedExpenses = additionalExpenses.map((expense, index) => ({
+          ...expense,
+          id: result.expense_ids[index] || expense.id
+        }))
+        setAdditionalExpenses(updatedExpenses)
 
-        if (payment.id && payment.id.length > 10) { // Check if it's a real database ID (UUID format)
-          // Update existing payment
-          await SupabaseService.updateBillPayment(payment.id, paymentData)
-          console.log('Updated payment with ID:', payment.id)
-        } else {
-          // Save new payment
-          const savedPaymentId = await SupabaseService.saveBillPayment(paymentData)
-          console.log('Saved new payment with ID:', savedPaymentId)
+        // Update payment IDs
+        const updatedPayments = payments.map((payment, index) => ({
+          ...payment,
+          id: result.payment_ids[index] || payment.id
+        }))
+        setPayments(updatedPayments)
+
+        // Update cache with correct IDs
+        const updatedData: MonthData = {
+          ...optimisticData,
+          additionalExpenses: updatedExpenses,
+          payments: updatedPayments
         }
+        billCache.set(renter.id, month, year, updatedData)
+
+        // Show success
+        setIsSaving(false)
+        alert('Saved!')
       }
       
-      alert('Bill calculated and saved successfully!')
-      
-      // Reload data to get IDs for new items
-      await loadMonthlyBillData()
     } catch (error) {
       console.error('Error saving bill:', error)
-      alert('Error saving bill. Please try again.')
+      
+      // 6. Rollback on error: invalidate cache and reload from database
+      billCache.invalidate(renter.id, month, year)
+      
+      try {
+        await loadMonthlyBillData()
+      } catch (reloadError) {
+        console.error('Error reloading data after save failure:', reloadError)
+      }
+      
+      setIsSaving(false)
+      
+      // Display user-friendly error message with retry option
+      const retry = window.confirm(
+        'Failed to save bill. The data has been restored to the last saved state.\n\nWould you like to try saving again?'
+      )
+      
+      if (retry) {
+        // Retry the save operation
+        handleCalculateAndSave()
+      }
     }
   }
 
-  const handleShareBill = () => {
-    const billText = generateBillSummary()
-    navigator.clipboard.writeText(billText)
-    alert('Bill summary copied to clipboard!')
+  const handleShareBill = async () => {
+    if (!billSummaryRef.current) return
+
+    try {
+      // Capture the bill summary as an image with better compatibility
+      const canvas = await html2canvas(billSummaryRef.current, {
+        backgroundColor: '#ffffff', // White background for the bill
+        scale: 2, // Higher quality
+        logging: false,
+        useCORS: true,
+        allowTaint: true,
+        foreignObjectRendering: false,
+      })
+
+      // Convert canvas to blob
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          alert('Failed to create image')
+          return
+        }
+
+        try {
+          // Try to copy to clipboard first (works on most modern browsers)
+          if (navigator.clipboard && window.ClipboardItem) {
+            const item = new ClipboardItem({ 'image/png': blob })
+            await navigator.clipboard.write([item])
+            alert('Bill image copied to clipboard! You can now paste it in WhatsApp or any chat.')
+          } else {
+            // Fallback: Try Web Share API
+            const file = new File([blob], `bill-${renter.name.replace(/\s+/g, '-')}-${format(selectedMonth, 'MMM-yyyy')}.png`, {
+              type: 'image/png',
+            })
+
+            if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                files: [file],
+                title: `Bill for ${renter.name}`,
+                text: `Bill summary for ${format(selectedMonth, 'MMMM yyyy')}`,
+              })
+            } else {
+              // Final fallback: Download the image
+              const url = URL.createObjectURL(blob)
+              const link = document.createElement('a')
+              link.href = url
+              link.download = file.name
+              document.body.appendChild(link)
+              link.click()
+              document.body.removeChild(link)
+              URL.revokeObjectURL(url)
+              alert('Bill image downloaded! You can find it in your downloads folder.')
+            }
+          }
+        } catch (error) {
+          if (error instanceof Error && error.name === 'AbortError') {
+            // User cancelled share, do nothing
+            return
+          }
+          
+          console.error('Share/Copy error:', error)
+          
+          // Final fallback: Download the image
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `bill-${renter.name.replace(/\s+/g, '-')}-${format(selectedMonth, 'MMM-yyyy')}.png`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(url)
+          alert('Bill image downloaded! You can find it in your downloads folder.')
+        }
+      }, 'image/png')
+    } catch (error) {
+      console.error('Error capturing bill:', error)
+      alert(`Failed to capture bill image: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   return (
@@ -366,7 +595,7 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
       <div className="fixed inset-0 bg-white z-[9999] overflow-hidden" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100vh' }}>
         {/* Header */}
       <header className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-2">
           <div className="flex items-center space-x-3">
             <button 
               onClick={onClose} 
@@ -374,28 +603,95 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
             >
               <ArrowLeft className="h-5 w-5 text-gray-700" />
             </button>
-            <div>
+            <div className="flex items-center space-x-2">
               <h1 className="text-lg font-bold text-gray-900 font-poppins">{renter.name}</h1>
+              <button
+                onClick={() => setShowActions(!showActions)}
+                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                title={showActions ? "Hide actions" : "Show actions"}
+              >
+                {showActions ? (
+                  <EyeOff className="h-4 w-4 text-gray-600" />
+                ) : (
+                  <Eye className="h-4 w-4 text-gray-600" />
+                )}
+              </button>
             </div>
           </div>
           
           <div className="flex items-center bg-gray-50 rounded-xl px-3 py-2">
-            <button onClick={previousMonth} className="p-1 hover:bg-white rounded-lg transition-colors">
+            <button 
+              onClick={previousMonth} 
+              className="p-1 hover:bg-white rounded-lg transition-colors"
+            >
               <ChevronLeft className="h-4 w-4 text-gray-600" />
             </button>
             <span className="text-sm font-semibold text-gray-800 px-3 min-w-[100px] text-center">
               {format(selectedMonth, 'MMM yyyy')}
             </span>
-            <button onClick={nextMonth} className="p-1 hover:bg-white rounded-lg transition-colors">
+            <button 
+              onClick={nextMonth} 
+              className="p-1 hover:bg-white rounded-lg transition-colors"
+            >
               <ChevronRight className="h-4 w-4 text-gray-600" />
             </button>
           </div>
         </div>
+        
+        {/* Archive and Delete buttons - only show when showActions is true */}
+        {showActions && (
+          <div className="flex items-center justify-end space-x-2">
+            {renter.is_active ? (
+              <button
+                onClick={() => {
+                  if (onArchive && renter.id) {
+                    if (window.confirm(`Archive ${renter.name}? You can unarchive them later.`)) {
+                      onArchive(renter.id.toString())
+                      onClose()
+                    }
+                  }
+                }}
+                className="flex items-center space-x-1 px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+              >
+                <Archive className="h-4 w-4" />
+                <span>Archive</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (onUnarchive && renter.id) {
+                    onUnarchive(renter.id.toString())
+                    onClose()
+                  }
+                }}
+                className="flex items-center space-x-1 px-3 py-1.5 text-sm bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition-colors"
+              >
+                <Archive className="h-4 w-4" />
+                <span>Unarchive</span>
+              </button>
+            )}
+            
+            <button
+              onClick={() => {
+                if (onDelete && renter.id) {
+                  if (window.confirm(`Delete ${renter.name}? This action cannot be undone!`)) {
+                    onDelete(renter.id.toString())
+                    onClose()
+                  }
+                }
+              }}
+              className="flex items-center space-x-1 px-3 py-1.5 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>Delete</span>
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="flex flex-col h-[calc(100vh-70px)]">
         {/* Compact Bill Summary */}
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl m-4 p-4 text-white shadow-lg flex-shrink-0">
+        <div className="rounded-2xl m-4 p-4 text-white shadow-lg flex-shrink-0" style={{ backgroundColor: '#2563eb' }}>
           <div className="flex justify-between items-center mb-3">
             <div className="flex items-center space-x-2">
               <h2 className="text-sm font-medium text-blue-100">Bill Summary</h2>
@@ -414,10 +710,19 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
             <div className="flex items-center space-x-2">
               <button
                 onClick={handleCalculateAndSave}
-                className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg transition-colors"
-                title="Calculate & Save"
+                disabled={isSaving}
+                className={`p-1.5 rounded-lg transition-colors ${
+                  isSaving 
+                    ? 'bg-white/10 cursor-not-allowed' 
+                    : 'bg-white/20 hover:bg-white/30'
+                }`}
+                title={isSaving ? "Saving..." : "Calculate & Save"}
               >
-                <Calculator className="h-4 w-4 text-blue-200 hover:text-white" />
+                <Calculator className={`h-4 w-4 ${
+                  isSaving 
+                    ? 'text-blue-300 animate-pulse' 
+                    : 'text-blue-200 hover:text-white'
+                }`} />
               </button>
               <button
                 onClick={handleShareBill}
@@ -438,51 +743,80 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
 
           {/* Compact Bill Text - Collapsible */}
           {showBillSummary && (
-          <div className="bg-white/10 rounded-xl p-3 mb-3 font-mono text-xs leading-relaxed">
-            <div className="text-white space-y-0.5">
-              <div className="font-semibold">BILL upto {format(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0), 'dd-MMM-yyyy')}</div>
+          <div ref={billSummaryRef} className="rounded-xl p-4" style={{ backgroundColor: '#ffffff', color: '#000000' }}>
+            <div className="space-y-2">
+              {/* Header */}
+              <div className="text-lg font-bold text-center mb-3" style={{ color: '#1f2937' }}>
+                BILL upto {format(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0), 'dd-MMM-yyyy')}
+                {isSaving && (
+                  <div className="text-xs text-blue-600 font-normal mt-1 animate-pulse">
+                    Saving...
+                  </div>
+                )}
+                {!isSaving && isDataStale && (
+                  <div className="text-xs text-yellow-600 font-normal mt-1">
+                    (Data may be outdated - refreshing...)
+                  </div>
+                )}
+              </div>
               
-              <div>+ Rs {Math.floor(rentAmount).toLocaleString('en-IN')} (rent)</div>
+              {/* Line items */}
+              <div className="space-y-1 text-sm" style={{ color: '#374151' }}>
+                <div>+ Rs {Math.floor(rentAmount).toLocaleString('en-IN')} (rent)</div>
+                
+                {electricityEnabled && electricityAmount > 0 && (
+                  <div>
+                    + Rs {Math.floor(electricityAmount).toLocaleString('en-IN')}
+                    <div className="text-xs ml-3">
+                      (Electricity {`{${electricityData.finalReading.toLocaleString('en-IN')}-${electricityData.initialReading.toLocaleString('en-IN')}}*${electricityData.multiplier}`})
+                    </div>
+                  </div>
+                )}
+                
+                {motorEnabled && motorAmount > 0 && (
+                  <div>
+                    + Rs {Math.floor(motorAmount).toLocaleString('en-IN')}
+                    <div className="text-xs ml-3">
+                      (Motor {`{${motorData.finalReading.toLocaleString('en-IN')}-${motorData.initialReading.toLocaleString('en-IN')}}/${motorData.numberOfPeople}*${motorData.multiplier}`})
+                    </div>
+                  </div>
+                )}
+                
+                {waterEnabled && waterAmount > 0 && (
+                  <div>+ Rs {Math.floor(waterAmount).toLocaleString('en-IN')} (Water)</div>
+                )}
+                
+                {maintenanceEnabled && maintenanceAmount > 0 && (
+                  <div>+ Rs {Math.floor(maintenanceAmount).toLocaleString('en-IN')} (Maintenance)</div>
+                )}
+                
+                {additionalExpenses.map((expense, index) => (
+                  <div key={expense.id || `expense-summary-${index}`}>+ Rs {Math.floor(expense.amount).toLocaleString('en-IN')} ({expense.description})</div>
+                ))}
+              </div>
               
-              {electricityEnabled && electricityAmount > 0 && (
-                <div>
-                  + Rs {Math.floor(electricityAmount).toLocaleString('en-IN')}
-                  <br />
-                  (Electricity {`{${electricityData.finalReading.toLocaleString('en-IN')}-${electricityData.initialReading.toLocaleString('en-IN')}}*${electricityData.multiplier}`})
-                  <br />
-                  (Reading on {format(electricityData.readingDate, 'd MMM yyyy')})
+              {/* Divider */}
+              <div className="border-t my-2" style={{ borderColor: '#d1d5db' }}></div>
+              
+              {/* Summary section */}
+              <div className="space-y-1 text-base">
+                <div className="flex justify-between font-semibold">
+                  <span>Total:</span>
+                  <span>Rs {Math.floor(totalAmount).toLocaleString('en-IN')}</span>
                 </div>
-              )}
-              
-              {motorEnabled && motorAmount > 0 && (
-                <div>
-                  + Rs {Math.floor(motorAmount).toLocaleString('en-IN')}
-                  <br />
-                  (Motor {`{${motorData.finalReading.toLocaleString('en-IN')}-${motorData.initialReading.toLocaleString('en-IN')}}/${motorData.numberOfPeople}*${motorData.multiplier}`})
-                  <br />
-                  (reading on {format(motorData.readingDate, 'd MMM yyyy')})
+                
+                {totalPayments > 0 && (
+                  <div className="flex justify-between" style={{ color: '#059669' }}>
+                    <span>Paid:</span>
+                    <span>Rs {Math.floor(totalPayments).toLocaleString('en-IN')}</span>
+                  </div>
+                )}
+                
+                <div className="flex justify-between font-bold text-lg pt-1" style={{ color: '#dc2626' }}>
+                  <span>Pending:</span>
+                  <span>Rs {Math.floor(pendingAmount).toLocaleString('en-IN')}</span>
                 </div>
-              )}
-              
-              {waterEnabled && waterAmount > 0 && (
-                <div>+ Rs {Math.floor(waterAmount).toLocaleString('en-IN')} (Water)</div>
-              )}
-              
-              {maintenanceEnabled && maintenanceAmount > 0 && (
-                <div>+ Rs {Math.floor(maintenanceAmount).toLocaleString('en-IN')} (Maintenance)</div>
-              )}
-              
-              {additionalExpenses.map((expense, index) => (
-                <div key={expense.id || `expense-summary-${index}`}>+ Rs {Math.floor(expense.amount).toLocaleString('en-IN')} ({expense.description})</div>
-              ))}
-              
-              <div className="font-bold text-yellow-300 mt-1">Total Rs {Math.floor(totalAmount).toLocaleString('en-IN')} pending</div>
-              
-              {totalPayments > 0 && (
-                <div className="text-green-300">- RS {Math.floor(totalPayments).toLocaleString('en-IN')} already given</div>
-              )}
-              
-              <div className="font-bold text-red-400 text-sm">Pending ;- Rs {Math.floor(pendingAmount).toLocaleString('en-IN')}&quot;</div>
+              </div>
             </div>
           </div>
           )}
@@ -630,7 +964,11 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
               </button>
             </div>
             {additionalExpenses.map((expense, index) => (
-              <div key={expense.id || `expense-${index}`} className="flex justify-between items-center py-2 border-b border-gray-100 last:border-b-0">
+              <div 
+                key={expense.id || `expense-${index}`} 
+                onClick={() => setEditingExpense(expense)}
+                className="flex justify-between items-center py-2 border-b border-gray-100 last:border-b-0 cursor-pointer hover:bg-gray-50 transition-colors rounded px-2"
+              >
                 <span className="text-sm text-gray-700">{expense.description}</span>
                 <span className="text-sm font-semibold text-gray-900">{formatIndianCurrency(expense.amount)}</span>
               </div>
@@ -649,7 +987,11 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
               </button>
             </div>
             {payments.map((payment, index) => (
-              <div key={payment.id || `payment-${index}`} className="flex justify-between items-center py-3 border-b border-gray-100 last:border-b-0">
+              <div 
+                key={payment.id || `payment-${index}`} 
+                onClick={() => setEditingPayment(payment)}
+                className="flex justify-between items-center py-3 border-b border-gray-100 last:border-b-0 cursor-pointer hover:bg-gray-50 transition-colors rounded px-2"
+              >
                 <div>
                   <p className="text-sm font-medium text-gray-900">{formatIndianCurrency(payment.amount)}</p>
                   <p className="text-xs text-gray-500">{format(payment.date, 'dd MMM yyyy')} • {payment.type}</p>
@@ -684,6 +1026,140 @@ export default function RenterProfile({ renter, onClose }: RenterProfileProps) {
             setShowAddPayment(false)
           }}
         />
+      )}
+
+      {/* Edit/Delete Expense Modal */}
+      {editingExpense && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-[10000] flex items-center justify-center p-4"
+          onClick={() => setEditingExpense(null)}
+        >
+          <div 
+            className="bg-white rounded-2xl p-6 max-w-sm w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Edit Expense</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <input
+                  type="text"
+                  value={editingExpense.description}
+                  onChange={(e) => setEditingExpense({...editingExpense, description: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+                  style={{ color: '#111827' }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={editingExpense.amount}
+                  onChange={(e) => setEditingExpense({...editingExpense, amount: parseFloat(e.target.value) || 0})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+                  style={{ color: '#111827' }}
+                />
+              </div>
+              <div className="flex space-x-2 pt-4">
+                <button
+                  onClick={() => {
+                    setAdditionalExpenses(additionalExpenses.map(e => 
+                      e.id === editingExpense.id ? editingExpense : e
+                    ))
+                    setEditingExpense(null)
+                  }}
+                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Delete this expense?')) {
+                      setAdditionalExpenses(additionalExpenses.filter(e => e.id !== editingExpense.id))
+                      setEditingExpense(null)
+                    }
+                  }}
+                  className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors font-semibold"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit/Delete Payment Modal */}
+      {editingPayment && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-[10000] flex items-center justify-center p-4"
+          onClick={() => setEditingPayment(null)}
+        >
+          <div 
+            className="bg-white rounded-2xl p-6 max-w-sm w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Edit Payment</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={editingPayment.amount}
+                  onChange={(e) => setEditingPayment({...editingPayment, amount: parseFloat(e.target.value) || 0})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+                  style={{ color: '#111827' }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={format(editingPayment.date, 'yyyy-MM-dd')}
+                  onChange={(e) => setEditingPayment({...editingPayment, date: new Date(e.target.value)})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+                  style={{ color: '#111827' }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                <select
+                  value={editingPayment.type}
+                  onChange={(e) => setEditingPayment({...editingPayment, type: e.target.value as 'cash' | 'online'})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
+                  style={{ color: '#111827' }}
+                >
+                  <option value="cash">Cash</option>
+                  <option value="online">Online</option>
+                </select>
+              </div>
+              <div className="flex space-x-2 pt-4">
+                <button
+                  onClick={() => {
+                    setPayments(payments.map(p => 
+                      p.id === editingPayment.id ? editingPayment : p
+                    ))
+                    setEditingPayment(null)
+                  }}
+                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Delete this payment?')) {
+                      setPayments(payments.filter(p => p.id !== editingPayment.id))
+                      setEditingPayment(null)
+                    }
+                  }}
+                  className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors font-semibold"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
       </div>
     </>

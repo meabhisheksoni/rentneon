@@ -6,7 +6,7 @@ import { Calendar, Home, Users, IndianRupee, Receipt, Plus, Menu, LogOut, User, 
 import { SupabaseService } from '@/services/supabaseService'
 import { Renter } from '@/types'
 import { useAuth } from '@/contexts/AuthContext'
-import { formatIndianCurrency, formatIndianUnits } from '@/utils/formatters'
+import { formatIndianCurrency } from '@/utils/formatters'
 import AddRenterModal from './AddRenterModal'
 import RenterCard from './RenterCard'
 
@@ -22,6 +22,7 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true)
   const [showSidebar, setShowSidebar] = useState(false)
   const [viewMode, setViewMode] = useState<'active' | 'archived' | 'all'>('active')
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     loadDashboardData()
@@ -29,27 +30,24 @@ export default function Dashboard() {
 
   const loadDashboardData = async () => {
     setIsLoading(true)
+    setLoadError(null)
     try {
-      const [rentersData, archivedRentersData, totalRent, pending] = await Promise.all([
-        SupabaseService.getActiveRenters(),
-        SupabaseService.getArchivedRenters(),
-        SupabaseService.getTotalMonthlyRent(),
-        SupabaseService.getOutstandingAmount(testDate)
-      ])
+      // Use single getDashboardSummary call instead of multiple queries
+      const summary = await SupabaseService.getDashboardSummary(testDate)
 
-      console.log('Loaded renters data:', rentersData)
-      console.log('Loaded total rent from service:', totalRent)
-      console.log('Loaded pending amount:', pending)
+      console.log('Loaded dashboard summary:', summary)
 
-      setRenters(rentersData)
-      setArchivedRenters(archivedRentersData)
-      setTotalRenters(rentersData.length)
-      setTotalMonthlyRent(totalRent)
-      setPendingAmount(pending)
+      // Update all state from the single response
+      setRenters(summary.active_renters)
+      setArchivedRenters(summary.archived_renters)
+      setTotalRenters(summary.metrics.total_renters)
+      setTotalMonthlyRent(summary.metrics.total_monthly_rent)
+      setPendingAmount(summary.metrics.pending_amount)
 
-      console.log('Set initial metrics - renters:', rentersData.length, 'total rent:', totalRent)
+      console.log('Set metrics from server - renters:', summary.metrics.total_renters, 'total rent:', summary.metrics.total_monthly_rent)
     } catch (error) {
       console.error('Error loading dashboard data:', error)
+      setLoadError(error instanceof Error ? error.message : 'Failed to load dashboard data')
     } finally {
       setIsLoading(false)
     }
@@ -60,66 +58,36 @@ export default function Dashboard() {
     loadDashboardData() // Reload all data to get updated metrics
   }
 
-  // Calculate metrics from current active renters
-  const calculateMetrics = async () => {
-    const activeRenters = renters // Only use active renters for metrics
-
-    console.log('Calculating metrics for renters:', activeRenters.length)
-    console.log('Renter monthly rents:', activeRenters.map(r => ({ name: r.name, rent: r.monthly_rent })))
-
-    // Update basic metrics
-    const totalRentersCount = activeRenters.length
-    const totalRentSum = activeRenters.reduce((sum: number, renter: Renter) => {
-      console.log(`Adding ${renter.monthly_rent} for ${renter.name}`)
-      return sum + renter.monthly_rent
-    }, 0)
-
-    console.log('Calculated total renters:', totalRentersCount)
-    console.log('Calculated monthly rent sum:', totalRentSum)
-
-    setTotalRenters(totalRentersCount)
-    setTotalMonthlyRent(totalRentSum)
-
-    // Recalculate pending amount for active renters only
-    try {
-      const pending = await SupabaseService.getOutstandingAmount(testDate)
-      setPendingAmount(pending)
-      console.log('Calculated pending amount:', pending)
-    } catch (error) {
-      console.error('Error recalculating pending amount:', error)
-      // Keep existing pending amount if recalculation fails
-    }
-  }
-
-  useEffect(() => {
-    // Recalculate metrics whenever renters state changes
-    calculateMetrics()
-  }, [renters]) // Only depend on renters since archivedRenters doesn't affect active metrics
-
   const handleArchiveRenter = async (renterId: string) => {
     try {
-      console.log('Archiving renter:', renterId)
+      console.log('Dashboard: Archiving renter with ID:', renterId)
 
       await SupabaseService.setRenterActive(renterId, false)
+      console.log('Dashboard: Successfully archived renter')
+      
       await loadDashboardData() // Reload all data to reflect the change
+      console.log('Dashboard: Reloaded data after archiving')
 
       alert('Renter archived successfully!')
     } catch (error) {
-      console.error('Error archiving renter:', error)
+      console.error('Dashboard: Error archiving renter:', error)
       alert('Failed to archive renter. Please try again.')
     }
   }
 
   const handleUnarchiveRenter = async (renterId: string) => {
     try {
-      console.log('Unarchiving renter:', renterId)
+      console.log('Dashboard: Unarchiving renter with ID:', renterId)
 
       await SupabaseService.setRenterActive(renterId, true)
+      console.log('Dashboard: Successfully unarchived renter')
+      
       await loadDashboardData() // Reload all data to reflect the change
+      console.log('Dashboard: Reloaded data after unarchiving')
 
       alert('Renter unarchived successfully!')
     } catch (error) {
-      console.error('Error unarchiving renter:', error)
+      console.error('Dashboard: Error unarchiving renter:', error)
       alert('Failed to unarchive renter. Please try again.')
     }
   }
@@ -161,12 +129,102 @@ export default function Dashboard() {
 
   const currentRenters = getCurrentRenters()
 
+  // Retry handler for failed loads
+  const handleRetry = () => {
+    loadDashboardData()
+  }
+
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-4 border-blue-600 border-t-transparent mx-auto mb-4"></div>
-          <p className="text-gray-600 font-medium">Loading your dashboard...</p>
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+        <header className="bg-white shadow-lg border-b border-gray-200">
+          <div className="px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center py-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-blue-600 rounded-xl">
+                  <Home className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-gray-900 font-poppins">Rent Manager</h1>
+                  <p className="text-xs text-gray-500 font-medium">Property Management</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+        
+        <div className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto">
+          <div className="mb-6">
+            <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
+            <div className="h-4 w-64 bg-gray-200 rounded animate-pulse"></div>
+          </div>
+          
+          {/* Skeleton for metrics */}
+          <div className="grid grid-cols-3 gap-3 mb-8">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                <div className="w-10 h-10 bg-gray-200 rounded-lg mb-3 animate-pulse"></div>
+                <div className="h-3 w-20 bg-gray-200 rounded animate-pulse mb-2"></div>
+                <div className="h-6 w-24 bg-gray-200 rounded animate-pulse"></div>
+              </div>
+            ))}
+          </div>
+          
+          {/* Skeleton for renters */}
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                <div className="h-6 w-40 bg-gray-200 rounded animate-pulse mb-4"></div>
+                <div className="space-y-2">
+                  <div className="h-4 w-full bg-gray-200 rounded animate-pulse"></div>
+                  <div className="h-4 w-3/4 bg-gray-200 rounded animate-pulse"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Error state UI
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+        <header className="bg-white shadow-lg border-b border-gray-200">
+          <div className="px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center py-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-blue-600 rounded-xl">
+                  <Home className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-gray-900 font-poppins">Rent Manager</h1>
+                  <p className="text-xs text-gray-500 font-medium">Property Management</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+        
+        <div className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto">
+          <div className="bg-white rounded-2xl border border-red-200 p-8 sm:p-12 text-center shadow-lg">
+            <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <Receipt className="h-10 w-10 text-red-600" />
+            </div>
+            <h3 className="text-xl font-bold text-gray-900 mb-3 font-poppins">
+              Failed to Load Dashboard
+            </h3>
+            <p className="text-gray-600 font-medium mb-6 max-w-md mx-auto">
+              {loadError}
+            </p>
+            <button
+              onClick={handleRetry}
+              className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors font-semibold shadow-lg hover:shadow-xl"
+            >
+              Retry
+            </button>
+          </div>
         </div>
       </div>
     )
