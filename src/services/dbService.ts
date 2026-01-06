@@ -261,7 +261,10 @@ export class DbService {
                 .leftJoin(monthlyBills, eq(renters.id, monthlyBills.renterId))
                 .where(and(eq(renters.userId, userId), eq(renters.isActive, true)))
                 .groupBy(renters.id)
-                .orderBy(desc(renters.createdAt));
+                .orderBy(
+                    desc(sql`CAST(${renters.monthlyRent} AS DECIMAL)`),
+                    desc(renters.createdAt)
+                );
 
             return result.map(({ renter, totalPending }) =>
                 toRenterData(renter, parseFloat(totalPending))
