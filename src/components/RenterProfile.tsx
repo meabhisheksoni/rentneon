@@ -253,6 +253,20 @@ export default function RenterProfile({ renter, onClose, onArchive, onUnarchive,
           additionalExpenses: [],
           payments: []
         }
+
+        // Auto Carry Forward: Add previous month's pending debt as expense
+        const prevPending = billWithDetails?.previous_readings?.pending_amount || 0
+        if (prevPending > 0) {
+          const prevDate = new Date(year, month - 2, 1)
+          const prevMonthName = prevDate.toLocaleString('default', { month: 'long' })
+
+          billData.additionalExpenses.push({
+            id: `temp-${Date.now()}`,
+            description: `${prevMonthName} Left`,
+            amount: prevPending,
+            date: new Date()
+          })
+        }
       }
 
       // Verify request is still active

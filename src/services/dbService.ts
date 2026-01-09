@@ -83,6 +83,7 @@ export interface BillWithDetails {
     previous_readings: {
         electricity_final: number;
         motor_final: number;
+        pending_amount: number;
     };
 }
 
@@ -654,6 +655,7 @@ export class DbService {
                     previous_readings: {
                         electricity_final: previousBill?.electricity_final_reading || 0,
                         motor_final: previousBill?.motor_final_reading || 0,
+                        pending_amount: parseFloat(String(previousBill?.pending_amount || 0)),
                     },
                 };
             }
@@ -671,6 +673,7 @@ export class DbService {
                 previous_readings: {
                     electricity_final: previousBill?.electricity_final_reading || 0,
                     motor_final: previousBill?.motor_final_reading || 0,
+                    pending_amount: parseFloat(String(previousBill?.pending_amount || 0)),
                 },
             };
         } catch (error) {
@@ -722,7 +725,7 @@ export class DbService {
                     expenses: myExpenses.map(toExpenseData),
                     payments: myPayments.map(toPaymentData),
                     // Not needed for cache display of existing bills
-                    previous_readings: { electricity_final: 0, motor_final: 0 },
+                    previous_readings: { electricity_final: 0, motor_final: 0, pending_amount: 0 },
                 };
             });
         } catch (error) {
