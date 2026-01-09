@@ -254,15 +254,31 @@ export default function RenterProfile({ renter, onClose, onArchive, onUnarchive,
           payments: []
         }
 
-        // Auto Carry Forward: Add previous month's pending debt as expense
-        const prevPending = billWithDetails?.previous_readings?.pending_amount || 0
-        if (prevPending > 0) {
-          const prevDate = new Date(year, month - 2, 1)
-          const prevMonthName = prevDate.toLocaleString('default', { month: 'long' })
 
-          billData.additionalExpenses.push({
-            id: `temp-${Date.now()}`,
-            description: `${prevMonthName} Left`,
+      }
+
+      // Auto Carry Forward Logic (Runs for ALL bills)
+      const prevPending = billWithDetails?.previous_readings?.pending_amount || 0
+
+      if (prevPending > 0) {
+        const prevDate = new Date(year, month - 2, 1)
+        const prevMonthName = prevDate.toLocaleString('default', { month: 'long' })
+        const carryForwardDescription = `${prevMonthName} Left`
+
+        // Check for duplicates
+        // 1. Exact match description
+        // 2. Or same amount + "Month Left" pattern
+        const exists = billData!.additionalExpenses.some(exp =>
+          exp.description.toLowerCase().trim() === carryForwardDescription.toLowerCase().trim() ||
+          (Math.abs(exp.amount - prevPending) < 1 &&
+            exp.description.toLowerCase().includes(prevMonthName.toLowerCase()) &&
+            exp.description.toLowerCase().includes('left'))
+        )
+
+        if (!exists) {
+          billData!.additionalExpenses.push({
+            id: `temp-carry-${Date.now()}`,
+            description: carryForwardDescription,
             amount: prevPending,
             date: new Date()
           })
