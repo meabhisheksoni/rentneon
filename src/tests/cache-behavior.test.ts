@@ -297,8 +297,7 @@ class CacheBehaviorTests {
       // Manually manipulate the cache timestamp to simulate TTL expiry
       // This is a bit hacky but necessary for testing without waiting 5 minutes
       const cacheKey = this.cache.getCacheKey(renterId, month, year)
-      // @ts-expect-error - accessing private property for testing
-      const entry = this.cache['cache'].get(cacheKey)
+      const entry = (this.cache as unknown as { cache: Map<string, { data: unknown; timestamp: number }> }).cache.get(cacheKey)
       if (entry) {
         entry.timestamp = Date.now() - (6 * 60 * 1000) // 6 minutes ago
       }

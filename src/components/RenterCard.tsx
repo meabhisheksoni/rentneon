@@ -12,16 +12,17 @@ interface RenterCardProps {
   onArchive?: (renterId: string) => void
   onUnarchive?: (renterId: string) => void
   onDelete?: (renterId: string) => void
+  onClick?: () => void
 }
 
-export default function RenterCard({ renter, onArchive, onUnarchive, onDelete }: RenterCardProps) {
+export default function RenterCard({ renter, onArchive, onUnarchive, onDelete, onClick }: RenterCardProps) {
   const [showProfile, setShowProfile] = useState(false)
 
   return (
     <>
       <div className="relative">
         <div
-          onClick={() => setShowProfile(true)}
+          onClick={() => (onClick ? onClick() : setShowProfile(true))}
           className="bg-white rounded-2xl border border-gray-200 p-5 hover:shadow-lg transition-all duration-300 cursor-pointer hover:border-blue-200 group relative"
         >
           {/* Top Section - Renter Info */}

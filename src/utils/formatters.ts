@@ -66,8 +66,8 @@ export const formatInputValue = (value: number): string => {
 // Handle input change with Indian formatting
 export const handleIndianNumberInput = (
   value: string,
-  onChange: (num: number) => void
-) => {
+  onChange?: (num: number) => void
+): number => {
   // Remove all non-numeric characters except decimal point
   const cleaned = value.replace(/[^0-9.]/g, '')
   
@@ -76,7 +76,10 @@ export const handleIndianNumberInput = (
   const formatted = parts[0] + (parts.length > 1 ? '.' + parts[1] : '')
   
   const numValue = parseFloat(formatted) || 0
-  onChange(numValue)
+  if (onChange) {
+    onChange(numValue)
+  }
+  return numValue
 }
 
 // Format input value with commas as user types (for display only)

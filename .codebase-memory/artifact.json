@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "b1d1e1650acb277fcf654bb76d2ef0a8407365e5",
+    "indexed_at": "2026-09-24T18:25:03Z",
+    "project": "home-evanderfrost0-rentneon",
+    "nodes": 1033,
+    "edges": 2487,
+    "original_size": 4194304,
+    "compressed_size": 733833,
+    "compression_level": 9
+}

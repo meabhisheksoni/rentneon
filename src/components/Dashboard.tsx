@@ -1,56 +1,59 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { format } from 'date-fns'
-import { Calendar, Home, Users, IndianRupee, Receipt, Plus, Menu, LogOut, User, Archive } from 'lucide-react'
+import { Building2, Menu, LogOut, User, RefreshCw, AlertTriangle, Plus, X } from 'lucide-react'
 import { ApiService } from '@/services/apiService'
-import { Renter } from '@/types'
+import { Renter, DashboardSummary } from '@/types'
 import { useAuth } from '@/contexts/AuthContext'
-import { formatIndianCurrency } from '@/utils/formatters'
+import { billCache } from '@/utils/billCache'
+
+import { MetricsHeader } from './dashboard/MetricsHeader'
+import { DashboardFilters, DashboardViewMode } from './dashboard/DashboardFilters'
 import AddRenterModal from './AddRenterModal'
 import RenterCard from './RenterCard'
-import { billCache } from '@/utils/billCache'
+import RenterProfile from './RenterProfile'
 
 export default function Dashboard() {
   const { user, signOut } = useAuth()
-  const [testDate, setTestDate] = useState(new Date())
+  const [testDate] = useState<Date>(new Date())
   const [renters, setRenters] = useState<Renter[]>([])
-  const [totalRenters, setTotalRenters] = useState(0)
-  const [totalMonthlyRent, setTotalMonthlyRent] = useState(0)
-  const [pendingAmount, setPendingAmount] = useState(0)
-  const [showAddModal, setShowAddModal] = useState(false)
   const [archivedRenters, setArchivedRenters] = useState<Renter[]>([])
+  const [metrics, setMetrics] = useState({
+    totalRenters: 0,
+    totalMonthlyRent: 0,
+    pendingAmount: 0,
+  })
+
   const [isLoading, setIsLoading] = useState(true)
-  const [showSidebar, setShowSidebar] = useState(false)
-  const [viewMode, setViewMode] = useState<'active' | 'archived' | 'all'>('active')
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [showSidebar, setShowSidebar] = useState(false)
+  const [viewMode, setViewMode] = useState<DashboardViewMode>('active')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedRenter, setSelectedRenter] = useState<Renter | null>(null)
 
   const loadDashboardData = useCallback(async () => {
     setIsLoading(true)
     setLoadError(null)
     try {
-      // Use single getDashboardSummary call instead of multiple queries
       const summary = await ApiService.getDashboardSummary()
 
-      console.log('Loaded dashboard summary:', summary)
+      setRenters(summary.active_renters || [])
+      setArchivedRenters(summary.archived_renters || [])
+      setMetrics({
+        totalRenters: summary.metrics.total_renters || 0,
+        totalMonthlyRent: summary.metrics.total_monthly_rent || 0,
+        pendingAmount: summary.metrics.pending_amount || 0,
+      })
 
-      // Update all state from the single response
-      setRenters(summary.active_renters)
-      setArchivedRenters(summary.archived_renters)
-      setTotalRenters(summary.metrics.total_renters)
-      setTotalMonthlyRent(summary.metrics.total_monthly_rent)
-      setPendingAmount(summary.metrics.pending_amount)
-
-      console.log('Set metrics from server - renters:', summary.metrics.total_renters, 'total rent:', summary.metrics.total_monthly_rent)
-      console.log('Set metrics from server - renters:', summary.metrics.total_renters, 'total rent:', summary.metrics.total_monthly_rent)
-
-      // Background preload of all bill data
-      summary.active_renters.forEach(async (renter) => {
+      // Background preload bills for active renters
+      ;(summary.active_renters || []).forEach(async (renter) => {
         try {
           const bills = await ApiService.getAllBills(renter.id)
           billCache.populateFromBulk(renter.id, bills)
-        } catch (err) {
-          console.error(`Failed to preload data for renter ${renter.id}`, err)
+        } catch {
+          // Ignore background cache preload errors
         }
       })
     } catch (error) {
@@ -59,417 +62,207 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false)
     }
-  }, [testDate])
+  }, [])
 
   useEffect(() => {
     loadDashboardData()
   }, [loadDashboardData])
 
-  const handleRenterAdded = () => {
-    setShowAddModal(false)
-    loadDashboardData() // Reload all data to get updated metrics
-  }
-
+  // Tenant lifecycle operations
   const handleArchiveRenter = async (renterId: string) => {
     try {
-      console.log('Dashboard: Archiving renter with ID:', renterId)
-
       await ApiService.setRenterActive(renterId, false)
-      console.log('Dashboard: Successfully archived renter')
-
-      await loadDashboardData() // Reload all data to reflect the change
-      console.log('Dashboard: Reloaded data after archiving')
-
-      alert('Renter archived successfully!')
+      await loadDashboardData()
+      if (selectedRenter?.id === Number(renterId)) {
+        setSelectedRenter(null)
+      }
     } catch (error) {
-      console.error('Dashboard: Error archiving renter:', error)
-      alert('Failed to archive renter. Please try again.')
+      console.error('Error archiving renter:', error)
+      alert('Failed to archive renter.')
     }
   }
 
   const handleUnarchiveRenter = async (renterId: string) => {
     try {
-      console.log('Dashboard: Unarchiving renter with ID:', renterId)
-
       await ApiService.setRenterActive(renterId, true)
-      console.log('Dashboard: Successfully unarchived renter')
-
-      await loadDashboardData() // Reload all data to reflect the change
-      console.log('Dashboard: Reloaded data after unarchiving')
-
-      alert('Renter unarchived successfully!')
+      await loadDashboardData()
+      if (selectedRenter?.id === Number(renterId)) {
+        setSelectedRenter(null)
+      }
     } catch (error) {
-      console.error('Dashboard: Error unarchiving renter:', error)
-      alert('Failed to unarchive renter. Please try again.')
+      console.error('Error unarchiving renter:', error)
+      alert('Failed to unarchive renter.')
     }
   }
 
   const handleDeleteRenter = async (renterId: string) => {
-    if (window.confirm('Are you sure you want to delete this renter? This action cannot be undone.')) {
-      try {
-        console.log('Dashboard: Starting deletion for renter ID:', renterId)
-
-        // Delete from database using SupabaseService
-        await ApiService.deleteRenter(renterId)
-        console.log('Dashboard: Successfully deleted renter from database')
-
-        // Reload all data to reflect the change
-        await loadDashboardData()
-        console.log('Dashboard: Reloaded dashboard data after deletion')
-
-        alert('Renter deleted successfully!')
-      } catch (error) {
-        console.error('Dashboard: Error deleting renter:', error)
-        alert(`Failed to delete renter: ${error instanceof Error ? error.message : String(error)}`)
+    try {
+      await ApiService.deleteRenter(renterId)
+      await loadDashboardData()
+      if (selectedRenter?.id === Number(renterId)) {
+        setSelectedRenter(null)
       }
+    } catch (error) {
+      console.error('Error deleting renter:', error)
+      alert('Failed to delete renter.')
     }
   }
 
-  // Get the current list of renters based on view mode
-  const getCurrentRenters = () => {
-    switch (viewMode) {
-      case 'active':
-        return renters
-      case 'archived':
-        return archivedRenters
-      case 'all':
-        return [...renters, ...archivedRenters]
-      default:
-        return renters
-    }
-  }
+  // Filtered Renter List
+  const displayedRenters = useMemo(() => {
+    let list: Renter[] = []
+    if (viewMode === 'active') list = renters
+    else if (viewMode === 'archived') list = archivedRenters
+    else list = [...renters, ...archivedRenters]
 
-  const currentRenters = getCurrentRenters()
+    if (!searchQuery.trim()) return list
 
-  // Retry handler for failed loads
-  const handleRetry = () => {
-    loadDashboardData()
-  }
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-        <header className="bg-white shadow-lg border-b border-gray-200">
-          <div className="px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center py-4">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-blue-600 rounded-xl">
-                  <Home className="h-6 w-6 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-xl font-bold text-gray-900 font-poppins">Rent Manager</h1>
-                  <p className="text-xs text-gray-500 font-medium">Property Management</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <div className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto">
-          <div className="mb-6">
-            <div className="h-8 w-48 bg-gray-200 rounded animate-pulse mb-2"></div>
-            <div className="h-4 w-64 bg-gray-200 rounded animate-pulse"></div>
-          </div>
-
-          {/* Skeleton for metrics */}
-          <div className="grid grid-cols-3 gap-3 mb-8">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-                <div className="w-10 h-10 bg-gray-200 rounded-lg mb-3 animate-pulse"></div>
-                <div className="h-3 w-20 bg-gray-200 rounded animate-pulse mb-2"></div>
-                <div className="h-6 w-24 bg-gray-200 rounded animate-pulse"></div>
-              </div>
-            ))}
-          </div>
-
-          {/* Skeleton for renters */}
-          <div className="space-y-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-                <div className="h-6 w-40 bg-gray-200 rounded animate-pulse mb-4"></div>
-                <div className="space-y-2">
-                  <div className="h-4 w-full bg-gray-200 rounded animate-pulse"></div>
-                  <div className="h-4 w-3/4 bg-gray-200 rounded animate-pulse"></div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+    const q = searchQuery.toLowerCase()
+    return list.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        (r.property_address && r.property_address.toLowerCase().includes(q)) ||
+        (r.phone && r.phone.includes(q))
     )
-  }
+  }, [viewMode, renters, archivedRenters, searchQuery])
 
-  // Error state UI
-  if (loadError) {
+  // If a renter profile is selected, render full profile view
+  if (selectedRenter) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-        <header className="bg-white shadow-lg border-b border-gray-200">
-          <div className="px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center py-4">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-blue-600 rounded-xl">
-                  <Home className="h-6 w-6 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-xl font-bold text-gray-900 font-poppins">Rent Manager</h1>
-                  <p className="text-xs text-gray-500 font-medium">Property Management</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <div className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto">
-          <div className="bg-white rounded-2xl border border-red-200 p-8 sm:p-12 text-center shadow-lg">
-            <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
-              <Receipt className="h-10 w-10 text-red-600" />
-            </div>
-            <h3 className="text-xl font-bold text-gray-900 mb-3 font-poppins">
-              Failed to Load Dashboard
-            </h3>
-            <p className="text-gray-600 font-medium mb-6 max-w-md mx-auto">
-              {loadError}
-            </p>
-            <button
-              onClick={handleRetry}
-              className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors font-semibold shadow-lg hover:shadow-xl"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      </div>
+      <RenterProfile
+        renter={selectedRenter}
+        onClose={() => setSelectedRenter(null)}
+        onArchive={handleArchiveRenter}
+        onUnarchive={handleUnarchiveRenter}
+        onDelete={handleDeleteRenter}
+      />
     )
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Mobile-First Header */}
-      <header className="bg-white shadow-lg border-b border-gray-100">
-        <div className="px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center space-x-3">
-              {/* Hamburger Menu */}
-              <button
-                onClick={() => setShowSidebar(!showSidebar)}
-                className="p-2 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
-              >
-                <Menu className="h-6 w-6 text-gray-600" />
-              </button>
-
-              <div className="p-2 bg-blue-600 rounded-xl">
-                <Home className="h-6 w-6 text-white" />
+    <div className="min-h-screen bg-gray-50/50 flex flex-col">
+      {/* Top Navigation Bar */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-100 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowSidebar(!showSidebar)}
+              className="p-2 -ml-2 rounded-xl text-gray-600 hover:bg-gray-100 transition-colors"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow-md shadow-blue-500/20 text-white font-bold">
+                <Building2 className="w-5 h-5" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900 font-poppins">Rent Manager</h1>
-                <p className="text-xs text-gray-500 font-medium">Property Management</p>
+                <h1 className="text-base font-black text-gray-900 tracking-tight leading-none">
+                  RentNeon
+                </h1>
+                <span className="text-[10px] text-gray-500 font-medium">Rental Management</span>
               </div>
             </div>
-            <div className="flex items-center space-x-3">
-              <div className="hidden sm:flex items-center space-x-2 text-sm text-gray-600">
-                <span className="font-medium">Welcome, <span className="font-semibold text-gray-800">{user?.email}</span></span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={loadDashboardData}
+              disabled={isLoading}
+              className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"
+              title="Refresh Dashboard"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-blue-600' : ''}`} />
+            </button>
+
+            <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-gray-200">
+              <div className="w-7 h-7 bg-blue-50 text-blue-700 rounded-full flex items-center justify-center font-bold text-xs">
+                {user?.name ? user.name.charAt(0).toUpperCase() : <User className="w-3.5 h-3.5" />}
               </div>
-
-              {/* Sign Out Icon */}
-              <button
-                onClick={async () => {
-                  try {
-                    console.log('Dashboard: Starting signout from header icon...')
-                    console.log('Dashboard: Current user:', user?.email)
-                    await signOut()
-                    console.log('Dashboard: Signout completed from header icon')
-
-                    // Force redirect to login by clearing localStorage and reloading
-                    localStorage.clear()
-                    window.location.href = '/'
-
-                  } catch (error) {
-                    console.error('Dashboard: Signout failed from header icon:', error)
-                    alert('Signout failed. Please try again.')
-                  }
-                }}
-                className="p-2 bg-red-100 hover:bg-red-200 rounded-xl transition-colors"
-                title="Sign Out"
-              >
-                <LogOut className="h-5 w-5 text-red-600" />
-              </button>
+              <span className="text-xs font-semibold text-gray-700 max-w-[120px] truncate">
+                {user?.name || user?.email || 'Owner'}
+              </span>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Sidebar Menu */}
-      {showSidebar && (
-        <div className="fixed inset-0 z-50 flex">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50"
-            onClick={() => setShowSidebar(false)}
-          />
-
-          {/* Sidebar */}
-          <div className="relative bg-white w-80 shadow-xl">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold text-gray-900">Menu</h2>
-                <button
-                  onClick={() => setShowSidebar(false)}
-                  className="p-2 hover:bg-gray-100 rounded-lg"
-                >
-                  <Menu className="h-5 w-5 text-gray-500 rotate-90" />
-                </button>
-              </div>
+      {/* Main Container */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
+        {/* Error Retry Banner */}
+        {loadError && (
+          <div className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 text-red-800 text-sm">
+              <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0" />
+              <span>{loadError}</span>
             </div>
-
-            <div className="p-4 space-y-2">
-              {/* View Mode Options */}
-              <div className="space-y-1">
-                <button
-                  onClick={() => {
-                    setViewMode('active')
-                    setShowSidebar(false)
-                  }}
-                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-colors ${viewMode === 'active' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                >
-                  <Users className="h-5 w-5" />
-                  <span className="font-medium">Active Renters</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setViewMode('archived')
-                    setShowSidebar(false)
-                  }}
-                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-colors ${viewMode === 'archived' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                >
-                  <Archive className="h-5 w-5" />
-                  <span className="font-medium">Archived Renters</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setViewMode('all')
-                    setShowSidebar(false)
-                  }}
-                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-colors ${viewMode === 'all' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                >
-                  <User className="h-5 w-5" />
-                  <span className="font-medium">All Profiles</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto">
-        {/* Mobile-Optimized Dashboard Header */}
-        {viewMode !== 'archived' && (
-          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 space-y-4 sm:space-y-0">
-            <div>
-              <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 font-poppins">Dashboard</h2>
-              <p className="text-gray-600 font-medium mt-1">Manage your rental properties</p>
-            </div>
-            <div className="flex items-center space-x-2 px-4 py-2 bg-white border border-gray-200 rounded-xl shadow-sm">
-              <Calendar className="h-4 w-4 text-gray-500" />
-              <span className="text-sm font-medium text-gray-700">Test Date:</span>
-              <input
-                type="date"
-                value={format(testDate, 'yyyy-MM-dd')}
-                onChange={(e) => setTestDate(new Date(e.target.value))}
-                className="text-sm font-semibold text-gray-900 bg-transparent border-none outline-none"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Compact Horizontal Metrics Tiles */}
-        {viewMode !== 'archived' && (
-          <div className="grid grid-cols-3 gap-3 mb-8">
-            <MetricTile
-              title="Total Renters"
-              value={totalRenters.toString()}
-              icon={<Users className="h-4 w-4 text-blue-600" />}
-              bgColor="bg-blue-50"
-              textColor="text-blue-700"
-            />
-            <MetricTile
-              title="Monthly Rent"
-              value={formatIndianCurrency(totalMonthlyRent)}
-              icon={<IndianRupee className="h-4 w-4 text-green-600" />}
-              bgColor="bg-green-50"
-              textColor="text-green-700"
-            />
-            <MetricTile
-              title="Pending Amount"
-              value={formatIndianCurrency(pendingAmount)}
-              icon={<Receipt className="h-4 w-4 text-orange-600" />}
-              bgColor="bg-orange-50"
-              textColor="text-orange-700"
-            />
-          </div>
-        )}
-
-        {/* Your Renters Section */}
-        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 space-y-4 sm:space-y-0">
-          <div>
-            <h3 className="text-xl font-bold text-gray-900 font-poppins">
-              {viewMode === 'active' && 'Your Renters'}
-              {viewMode === 'archived' && 'Archived Renters'}
-              {viewMode === 'all' && 'All Renter Profiles'}
-            </h3>
-            <p className="text-gray-600 font-medium">
-              {viewMode === 'active' && 'Manage tenant information and bills'}
-              {viewMode === 'archived' && 'Previously archived tenants'}
-              {viewMode === 'all' && 'View all renter profiles'}
-            </p>
-          </div>
-          {viewMode !== 'archived' && (
             <button
-              onClick={() => setShowAddModal(true)}
-              className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2 font-semibold shadow-lg hover:shadow-xl"
+              onClick={loadDashboardData}
+              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-sm"
             >
-              <Plus className="h-5 w-5" />
-              <span>Add Renter</span>
+              Retry
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Renters List */}
-        {currentRenters.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-gray-200 p-8 sm:p-12 text-center shadow-lg">
-            <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
-              <Users className="h-10 w-10 text-gray-400" />
-            </div>
-            <h3 className="text-xl font-bold text-gray-900 mb-3 font-poppins">
-              {viewMode === 'active' && 'No renters added yet'}
-              {viewMode === 'archived' && 'No archived renters'}
-              {viewMode === 'all' && 'No renter profiles found'}
-            </h3>
-            <p className="text-gray-600 font-medium mb-6 max-w-md mx-auto">
-              {viewMode === 'active' && 'Start managing your rental properties by adding your first tenant'}
-              {viewMode === 'archived' && 'No tenants have been archived yet'}
-              {viewMode === 'all' && 'No renter profiles are available'}
+        {/* Analytics & Metrics Header */}
+        <MetricsHeader
+          totalRenters={metrics.totalRenters}
+          totalMonthlyRent={metrics.totalMonthlyRent}
+          pendingAmount={metrics.pendingAmount}
+          selectedDate={testDate}
+          onAddRenter={() => setShowAddModal(true)}
+        />
+
+        {/* Search & Active/Archived Tabs */}
+        <DashboardFilters
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
+          activeCount={renters.length}
+          archivedCount={archivedRenters.length}
+        />
+
+        {/* Tenant Cards Grid */}
+        {isLoading && renters.length === 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {[1, 2, 3].map((n) => (
+              <div
+                key={n}
+                className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm animate-pulse space-y-4"
+              >
+                <div className="h-6 bg-gray-200 rounded w-1/2"></div>
+                <div className="h-4 bg-gray-100 rounded w-3/4"></div>
+                <div className="h-8 bg-gray-100 rounded"></div>
+              </div>
+            ))}
+          </div>
+        ) : displayedRenters.length === 0 ? (
+          <div className="text-center py-16 bg-white rounded-3xl border border-gray-100 shadow-sm p-8">
+            <Building2 className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+            <h3 className="text-base font-bold text-gray-800">No tenants found</h3>
+            <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+              {searchQuery
+                ? `No tenants match "${searchQuery}". Try clearing the search bar.`
+                : 'Get started by adding your first property tenant to track rent & utility bills.'}
             </p>
-            {viewMode === 'active' && (
+            {!searchQuery && (
               <button
                 onClick={() => setShowAddModal(true)}
-                className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2 font-semibold shadow-lg hover:shadow-xl"
+                className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-sm"
               >
-                <Plus className="h-5 w-5" />
-                <span>Add Your First Renter</span>
+                <Plus className="w-4 h-4" />
+                Add Tenant Now
               </button>
             )}
           </div>
         ) : (
-          <div className="space-y-4">
-            {currentRenters.map((renter) => (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {displayedRenters.map((renter) => (
               <RenterCard
                 key={renter.id}
                 renter={renter}
+                onClick={() => setSelectedRenter(renter)}
                 onArchive={handleArchiveRenter}
                 onUnarchive={handleUnarchiveRenter}
                 onDelete={handleDeleteRenter}
@@ -477,35 +270,60 @@ export default function Dashboard() {
             ))}
           </div>
         )}
-      </div>
+      </main>
+
+      {/* Slide-over Sidebar */}
+      {showSidebar && (
+        <div className="fixed inset-0 z-50 flex">
+          <div
+            className="fixed inset-0 bg-black/40 backdrop-blur-xs"
+            onClick={() => setShowSidebar(false)}
+          />
+          <div className="relative w-72 max-w-xs bg-white h-full shadow-2xl p-6 flex flex-col justify-between z-10">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <Building2 className="w-6 h-6 text-blue-600" />
+                  <span className="font-bold text-gray-900 text-lg">RentNeon</span>
+                </div>
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="p-1 text-gray-400 hover:text-gray-600 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="bg-gray-50 p-4 rounded-2xl space-y-1">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Signed In As</p>
+                <p className="text-sm font-bold text-gray-900 truncate">{user?.name || 'Property Landlord'}</p>
+                <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-gray-100">
+              <button
+                onClick={() => signOut()}
+                className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Renter Modal */}
       {showAddModal && (
         <AddRenterModal
           onClose={() => setShowAddModal(false)}
-          onRenterAdded={handleRenterAdded}
+          onRenterAdded={() => {
+            setShowAddModal(false)
+            loadDashboardData()
+          }}
         />
       )}
-    </div>
-  )
-}
-
-interface MetricTileProps {
-  title: string
-  value: string
-  icon: React.ReactNode
-  bgColor: string
-  textColor: string
-}
-
-function MetricTile({ title, value, icon, bgColor, textColor }: MetricTileProps) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-shadow">
-      <div className={`inline-flex items-center justify-center p-2 ${bgColor} rounded-lg mb-3`}>
-        {icon}
-      </div>
-      <h3 className="text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">{title}</h3>
-      <p className={`text-lg font-bold ${textColor} font-poppins`}>{value}</p>
     </div>
   )
 }
