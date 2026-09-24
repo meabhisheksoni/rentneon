@@ -48,7 +48,7 @@ export const BillShareModal: React.FC<BillShareModalProps> = ({
     try {
       await navigator.clipboard.writeText(messageText)
       setCopied(true)
-      success('Invoice summary copied to clipboard!', 'Copied')
+      success('Invoice text summary copied to clipboard!', 'Copied')
       setTimeout(() => setCopied(false), 2500)
     } catch (err) {
       console.error('Failed to copy text', err)
@@ -56,15 +56,101 @@ export const BillShareModal: React.FC<BillShareModalProps> = ({
     }
   }
 
-  const handleWhatsAppShare = () => {
-    const encoded = encodeURIComponent(messageText)
-    const phone = renter.phone?.replace(/[^0-9]/g, '') || ''
-    const url = phone.length >= 10 ? `https://wa.me/91${phone.slice(-10)}?text=${encoded}` : `https://wa.me/?text=${encoded}`
-    window.open(url, '_blank')
+  // Direct PNG Image Sharing to WhatsApp (Mobile native share sheet + Desktop clipboard/file fallback)
+  const handleShareImageWhatsApp = async () => {
+    if (!invoiceRef.current) return
+    setIsCapturing(true)
+    try {
+      const canvas = await html2canvas(invoiceRef.current, {
+        scale: 3,
+        backgroundColor: '#ffffff',
+        logging: false,
+        useCORS: true,
+      })
+
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, 'image/png')
+      )
+      if (!blob) throw new Error('Failed to create image blob')
+
+      const fileName = `RentBill_${renter.name.replace(/\s+/g, '_')}_${getMonthName(month)}_${year}.png`
+      const file = new File([blob], fileName, { type: 'image/png' })
+
+      // Check if browser/phone supports sharing image files directly
+      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Rent Bill - ${renter.name} (${getMonthName(month)} ${year})`,
+          text: `Rent invoice for ${renter.name} • ${getMonthName(month)} ${year}`,
+        })
+        success('Invoice image sent to WhatsApp / Share Sheet!', 'Shared')
+      } else {
+        // Fallback for Desktop: Copy image bitmap to clipboard & open WhatsApp Web
+        let clipboardCopied = false
+        try {
+          if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+            const item = new ClipboardItem({ 'image/png': blob })
+            await navigator.clipboard.write([item])
+            clipboardCopied = true
+          }
+        } catch {
+          clipboardCopied = false
+        }
+
+        // Also trigger file download as secondary guarantee
+        const link = document.createElement('a')
+        link.download = fileName
+        link.href = canvas.toDataURL('image/png')
+        link.click()
+
+        if (clipboardCopied) {
+          success('Invoice image copied to clipboard & downloaded! Paste (Ctrl+V) in WhatsApp.', 'Image Ready')
+        } else {
+          success('Invoice image downloaded! Attach the PNG file in WhatsApp.', 'Image Downloaded')
+        }
+
+        const phone = renter.phone?.replace(/[^0-9]/g, '') || ''
+        const url = phone.length >= 10 ? `https://wa.me/91${phone.slice(-10)}` : `https://wa.me/`
+        window.open(url, '_blank')
+      }
+    } catch (err) {
+      console.error('Failed to share image', err)
+      error('Could not share image directly. You can use Save PNG instead.', 'Share Error')
+    } finally {
+      setIsCapturing(false)
+    }
   }
 
-  const handlePrint = () => {
-    window.print()
+  // Copy Image Bitmap directly to Clipboard
+  const handleCopyImageBitmap = async () => {
+    if (!invoiceRef.current) return
+    setIsCapturing(true)
+    try {
+      const canvas = await html2canvas(invoiceRef.current, {
+        scale: 3,
+        backgroundColor: '#ffffff',
+        logging: false,
+        useCORS: true,
+      })
+
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, 'image/png')
+      )
+      if (!blob) throw new Error('Failed to create image blob')
+
+      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        const item = new ClipboardItem({ 'image/png': blob })
+        await navigator.clipboard.write([item])
+        success('High-res invoice image copied to clipboard! Paste (Ctrl+V) anywhere.', 'Image Copied')
+      } else {
+        error('Your browser does not support copying raw images. Use Save PNG instead.', 'Not Supported')
+      }
+    } catch (err) {
+      console.error('Failed to copy image to clipboard', err)
+      error('Failed to copy image to clipboard', 'Error')
+    } finally {
+      setIsCapturing(false)
+    }
   }
 
   const handleDownloadImage = async () => {
@@ -81,13 +167,17 @@ export const BillShareModal: React.FC<BillShareModalProps> = ({
       link.download = `RentBill_${renter.name.replace(/\s+/g, '_')}_${getMonthName(month)}_${year}.png`
       link.href = canvas.toDataURL('image/png')
       link.click()
-      success('High-resolution invoice saved!', 'Downloaded')
+      success('High-resolution invoice PNG saved!', 'Downloaded')
     } catch (err) {
       console.error('Failed to generate image', err)
       error('Failed to export invoice PNG', 'Export Error')
     } finally {
       setIsCapturing(false)
     }
+  }
+
+  const handlePrint = () => {
+    window.print()
   }
 
   return (
@@ -110,39 +200,54 @@ export const BillShareModal: React.FC<BillShareModalProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div className="space-y-2.5">
+          {/* Main WhatsApp Image Action */}
           <button
-            onClick={handleWhatsAppShare}
-            className="flex items-center justify-center gap-2 py-3 px-3.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-2xl font-bold text-xs shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
-          >
-            <Send className="w-4 h-4" />
-            WhatsApp
-          </button>
-
-          <button
-            onClick={handleCopyText}
-            className="flex items-center justify-center gap-2 py-3 px-3.5 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-800 rounded-2xl font-bold text-xs transition-all cursor-pointer"
-          >
-            {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-            {copied ? 'Copied' : 'Copy Text'}
-          </button>
-
-          <button
-            onClick={handleDownloadImage}
+            onClick={handleShareImageWhatsApp}
             disabled={isCapturing}
-            className="flex items-center justify-center gap-2 py-3 px-3.5 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 text-blue-700 rounded-2xl font-bold text-xs transition-all disabled:opacity-50 cursor-pointer"
+            className="w-full flex items-center justify-center gap-2.5 py-3.5 px-5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.99] text-white rounded-2xl font-black text-sm shadow-lg shadow-emerald-600/25 transition-all disabled:opacity-50 cursor-pointer"
           >
-            <Download className="w-4 h-4" />
-            {isCapturing ? 'Saving...' : 'Save PNG'}
+            <Send className="w-5 h-5" />
+            {isCapturing ? 'Generating & Sending Image...' : 'Send PNG Image via WhatsApp'}
           </button>
 
-          <button
-            onClick={handlePrint}
-            className="flex items-center justify-center gap-2 py-3 px-3.5 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-800 rounded-2xl font-bold text-xs transition-all cursor-pointer"
-          >
-            <Printer className="w-4 h-4" />
-            Print / PDF
-          </button>
+          {/* Secondary Utility Actions */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <button
+              onClick={handleCopyImageBitmap}
+              disabled={isCapturing}
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 rounded-xl font-bold text-xs transition-all disabled:opacity-50 cursor-pointer"
+              title="Copy Image to Clipboard for Ctrl+V"
+            >
+              <Copy className="w-4 h-4 text-emerald-600" />
+              Copy Image
+            </button>
+
+            <button
+              onClick={handleDownloadImage}
+              disabled={isCapturing}
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 text-blue-700 rounded-xl font-bold text-xs transition-all disabled:opacity-50 cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              Save PNG
+            </button>
+
+            <button
+              onClick={handleCopyText}
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-800 rounded-xl font-bold text-xs transition-all cursor-pointer"
+            >
+              {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+              {copied ? 'Copied' : 'Copy Text'}
+            </button>
+
+            <button
+              onClick={handlePrint}
+              className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-800 rounded-xl font-bold text-xs transition-all cursor-pointer"
+            >
+              <Printer className="w-4 h-4" />
+              Print / PDF
+            </button>
+          </div>
         </div>
 
         {/* Printable Visual Invoice Preview */}
