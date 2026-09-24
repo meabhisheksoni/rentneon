@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
     req: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     try {
         const session = await auth();
@@ -12,7 +12,8 @@ export async function GET(
             return new NextResponse('Unauthorized', { status: 401 });
         }
 
-        const renterId = parseInt(params.id, 10);
+        const { id } = await params;
+        const renterId = parseInt(id, 10);
         if (isNaN(renterId)) {
             return new NextResponse('Invalid Renter ID', { status: 400 });
         }

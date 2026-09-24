@@ -313,6 +313,41 @@ export class DbService {
         }
     }
 
+    static async updateRenter(
+        renterId: string | number,
+        updates: Partial<RenterData>,
+        userId: string
+    ): Promise<RenterData | null> {
+        try {
+            const numericId = typeof renterId === 'string' ? parseInt(renterId, 10) : renterId;
+            if (isNaN(numericId)) {
+                throw new Error('Invalid renter ID format');
+            }
+
+            const updateValues: Record<string, any> = {};
+            if (updates.name !== undefined) updateValues.name = updates.name;
+            if (updates.email !== undefined) updateValues.email = updates.email;
+            if (updates.phone !== undefined) updateValues.phone = updates.phone;
+            if (updates.property_address !== undefined) updateValues.propertyAddress = updates.property_address;
+            if (updates.monthly_rent !== undefined) updateValues.monthlyRent = String(updates.monthly_rent);
+            if (updates.move_in_date !== undefined) updateValues.moveInDate = updates.move_in_date;
+            if (updates.is_active !== undefined) updateValues.isActive = updates.is_active;
+
+            const [updated] = await db
+                .update(renters)
+                .set(updateValues)
+                .where(and(eq(renters.id, numericId), eq(renters.userId, userId)))
+                .returning();
+
+            return updated ? toRenterData(updated) : null;
+        } catch (error) {
+            console.error('Error updating renter:', error);
+            throw new Error(
+                `Failed to update renter: ${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+    }
+
     static async setRenterActive(
         renterId: string,
         isActive: boolean,

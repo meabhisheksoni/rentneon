@@ -1,7 +1,8 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import { useToast } from '@/contexts/ToastContext'
 import { Building2 } from 'lucide-react'
 
 import { LoginForm } from './auth/LoginForm'
@@ -9,7 +10,7 @@ import { SignupForm } from './auth/SignupForm'
 import { MPINPad } from './auth/MPINPad'
 import { BiometricPrompt } from './auth/BiometricPrompt'
 
-type AuthView = 'login' | 'signup' | 'mpin' | 'biometric' | 'setup-mpin'
+type AuthView = 'login' | 'signup' | 'mpin' | 'biometric'
 
 export default function Auth() {
   const [view, setView] = useState<AuthView>('login')
@@ -18,7 +19,7 @@ export default function Auth() {
   const [name, setName] = useState('')
   const [rememberMe, setRememberMe] = useState(true)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [errorBanner, setErrorBanner] = useState('')
 
   // MPIN & Biometrics State
   const [mpin, setMpin] = useState('')
@@ -26,8 +27,9 @@ export default function Auth() {
   const [hasBiometrics, setHasBiometrics] = useState(false)
 
   const { signIn, signUp } = useAuth()
+  const { success, error, info } = useToast()
 
-  // Initialize stored credentials & device authentication features
+  // Initialize stored credentials
   useEffect(() => {
     const savedEmail = localStorage.getItem('rememberedEmail')
     const savedMPIN = localStorage.getItem('userMPIN')
@@ -39,7 +41,6 @@ export default function Auth() {
 
     if (savedMPIN) {
       setHasSavedMPIN(true)
-      setView('mpin')
     }
 
     if (biometricEnabled && typeof window !== 'undefined' && window.PublicKeyCredential) {
@@ -51,12 +52,14 @@ export default function Auth() {
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    setError('')
+    setErrorBanner('')
 
     try {
       const { error: authError } = await signIn(email, password)
       if (authError) {
-        setError(authError.message || 'Invalid email or password')
+        const msg = authError.message || 'Invalid email or password'
+        setErrorBanner(msg)
+        error(msg, 'Authentication Failed')
         return
       }
 
@@ -65,8 +68,12 @@ export default function Auth() {
       } else {
         localStorage.removeItem('rememberedEmail')
       }
+
+      success('Welcome back to RentNeon!', 'Signed In')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'An error occurred during sign in')
+      const msg = err instanceof Error ? err.message : 'An error occurred during sign in'
+      setErrorBanner(msg)
+      error(msg, 'Error')
     } finally {
       setLoading(false)
     }
@@ -76,16 +83,21 @@ export default function Auth() {
   const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    setError('')
+    setErrorBanner('')
 
     try {
       const { error: authError } = await signUp(email, password)
       if (authError) {
-        setError(authError.message || 'Failed to create account')
+        const msg = authError.message || 'Failed to create account'
+        setErrorBanner(msg)
+        error(msg, 'Signup Error')
         return
       }
+      success('Your landlord account has been created!', 'Account Created')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'An error occurred during signup')
+      const msg = err instanceof Error ? err.message : 'An error occurred during signup'
+      setErrorBanner(msg)
+      error(msg, 'Error')
     } finally {
       setLoading(false)
     }
@@ -93,52 +105,41 @@ export default function Auth() {
 
   // MPIN Verification Handler
   const handleMPINSubmit = async (enteredPin: string) => {
-    setError('')
+    setErrorBanner('')
     const savedMPIN = localStorage.getItem('userMPIN')
-    const savedPassword = localStorage.getItem('rememberedPassword')
     const savedEmail = localStorage.getItem('rememberedEmail') || email
 
-    if (enteredPin === savedMPIN && savedPassword && savedEmail) {
+    if (enteredPin === savedMPIN && savedEmail) {
       setLoading(true)
       try {
-        const { error: authError } = await signIn(savedEmail, savedPassword)
-        if (authError) {
-          setError('Session expired. Please log in with password.')
-          setView('login')
-        }
-      } catch (err: unknown) {
-        setError('Authentication failed. Please use password.')
+        // Prompt for password if not cached in memory session
+        info('Quick MPIN recognized. Please enter password to complete secure session.', 'Device Unlock')
         setView('login')
       } finally {
         setLoading(false)
       }
     } else {
-      setError('Incorrect MPIN. Please try again.')
+      setErrorBanner('Incorrect MPIN. Please try again.')
       setMpin('')
     }
   }
 
   // WebAuthn Biometric Trigger
   const handleBiometricTrigger = async () => {
-    setError('')
+    setErrorBanner('')
     setLoading(true)
 
     try {
       const savedEmail = localStorage.getItem('rememberedEmail') || email
-      const savedPassword = localStorage.getItem('rememberedPassword')
-
-      if (!savedPassword || !savedEmail) {
-        setError('Please log in with password first to enable biometrics.')
+      if (!savedEmail) {
+        setErrorBanner('Please log in with email and password first.')
         setView('login')
         return
       }
-
-      const { error: authError } = await signIn(savedEmail, savedPassword)
-      if (authError) {
-        setError(authError.message)
-      }
+      info('Biometric verified on device.', 'Verified')
+      setView('login')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Biometric authentication failed')
+      setErrorBanner(err instanceof Error ? err.message : 'Biometric authentication failed')
     } finally {
       setLoading(false)
     }
@@ -149,17 +150,17 @@ export default function Auth() {
       <div className="bg-white/95 backdrop-blur-xl rounded-3xl max-w-md w-full p-8 shadow-2xl border border-white/20 space-y-6">
         {/* Brand Header */}
         <div className="text-center">
-          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-md shadow-blue-500/20">
+          <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg shadow-blue-500/25">
             <Building2 className="w-6 h-6 text-white" />
           </div>
           <h1 className="text-2xl font-black text-gray-900 tracking-tight">RentNeon</h1>
-          <p className="text-xs text-gray-500 mt-1">Smart Rental & Utility Management</p>
+          <p className="text-xs text-gray-500 mt-1 font-medium">Smart Rental & Utility Management</p>
         </div>
 
         {/* Global Error Banner */}
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-700 font-medium">
-            {error}
+        {errorBanner && (
+          <div className="p-3.5 bg-red-50 border border-red-200 rounded-2xl text-xs text-red-700 font-semibold flex items-center gap-2">
+            <span>{errorBanner}</span>
           </div>
         )}
 
@@ -175,15 +176,15 @@ export default function Auth() {
             loading={loading}
             onSubmit={handleLoginSubmit}
             onSwitchToSignup={() => {
-              setError('')
+              setErrorBanner('')
               setView('signup')
             }}
             onSwitchToMPIN={() => {
-              setError('')
+              setErrorBanner('')
               setView('mpin')
             }}
             onSwitchToBiometric={() => {
-              setError('')
+              setErrorBanner('')
               setView('biometric')
             }}
             hasSavedMPIN={hasSavedMPIN}
@@ -202,7 +203,7 @@ export default function Auth() {
             loading={loading}
             onSubmit={handleSignupSubmit}
             onSwitchToLogin={() => {
-              setError('')
+              setErrorBanner('')
               setView('login')
             }}
           />
@@ -214,11 +215,11 @@ export default function Auth() {
             onMpinChange={setMpin}
             onSubmit={handleMPINSubmit}
             onBackToPassword={() => {
-              setError('')
+              setErrorBanner('')
               setView('login')
             }}
             loading={loading}
-            error={error}
+            error={errorBanner}
           />
         )}
 
@@ -226,11 +227,11 @@ export default function Auth() {
           <BiometricPrompt
             onTriggerBiometric={handleBiometricTrigger}
             onBackToPassword={() => {
-              setError('')
+              setErrorBanner('')
               setView('login')
             }}
             loading={loading}
-            error={error}
+            error={errorBanner}
           />
         )}
       </div>

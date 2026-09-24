@@ -55,6 +55,19 @@ export class ApiService {
         await handleResponse(response);
     }
 
+    static async updateRenter(
+        renterId: string | number,
+        updates: Partial<RenterData>
+    ): Promise<RenterData> {
+        const response = await fetch(`/api/renters/${renterId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates),
+        });
+        const data = await handleResponse<{ success: boolean; renter: RenterData }>(response);
+        return data.renter;
+    }
+
     static async deleteRenter(renterId: string): Promise<void> {
         const response = await fetch(`/api/renters/${renterId}`, {
             method: 'DELETE',

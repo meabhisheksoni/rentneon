@@ -37,7 +37,7 @@ export async function GET(
     }
 }
 
-// PATCH /api/renters/[id] - Update renter (archive/unarchive)
+// PATCH /api/renters/[id] - Update renter profile or status
 export async function PATCH(
     request: NextRequest,
     { params }: { params: Promise<{ id: string }> }
@@ -52,11 +52,13 @@ export async function PATCH(
         const { id } = await params;
         const body = await request.json();
 
-        if (typeof body.is_active === 'boolean') {
-            await DbService.setRenterActive(id, body.is_active, session.user.id);
+        const updated = await DbService.updateRenter(id, body, session.user.id);
+
+        if (!updated) {
+            return NextResponse.json({ error: 'Renter not found or access denied' }, { status: 404 });
         }
 
-        return NextResponse.json({ success: true });
+        return NextResponse.json({ success: true, renter: updated });
     } catch (error) {
         console.error('Renter API error:', error);
         return NextResponse.json(

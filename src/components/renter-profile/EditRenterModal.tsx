@@ -1,25 +1,31 @@
 'use client'
 
-import { useState } from 'react'
-import { X, Calendar, User, IndianRupee, Phone, MapPin } from 'lucide-react'
-import { format } from 'date-fns'
+import React, { useState } from 'react'
+import { X, User, Phone, Mail, MapPin, IndianRupee, Calendar } from 'lucide-react'
+import { Renter } from '@/types'
 import { ApiService } from '@/services/apiService'
 import { formatInputValue, handleIndianNumberInput } from '@/utils/formatters'
 import { useToast } from '@/contexts/ToastContext'
 
-interface AddRenterModalProps {
+interface EditRenterModalProps {
+  renter: Renter
   onClose: () => void
-  onRenterAdded: () => void
+  onRenterUpdated: (updatedRenter: Renter) => void
 }
 
-export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModalProps) {
+export const EditRenterModal: React.FC<EditRenterModalProps> = ({
+  renter,
+  onClose,
+  onRenterUpdated,
+}) => {
   const { success, error } = useToast()
   const [formData, setFormData] = useState({
-    name: '',
-    phone: '',
-    propertyAddress: '',
-    monthlyRent: 0,
-    moveInDate: format(new Date(), 'yyyy-MM-dd'),
+    name: renter.name || '',
+    phone: renter.phone || '',
+    email: renter.email || '',
+    propertyAddress: renter.property_address || '',
+    monthlyRent: renter.monthly_rent || 0,
+    moveInDate: renter.move_in_date || '',
   })
   const [isLoading, setIsLoading] = useState(false)
 
@@ -27,27 +33,27 @@ export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModa
     e.preventDefault()
 
     if (!formData.name.trim() || formData.monthlyRent <= 0) {
-      error('Please provide a valid tenant name and monthly rent amount.', 'Validation Error')
+      error('Please provide a valid tenant name and monthly rent.', 'Validation Error')
       return
     }
 
     setIsLoading(true)
     try {
-      await ApiService.insertRenter({
+      const updated = await ApiService.updateRenter(renter.id, {
         name: formData.name.trim(),
-        email: null,
         phone: formData.phone.trim() || null,
+        email: formData.email.trim() || null,
         property_address: formData.propertyAddress.trim() || null,
         monthly_rent: formData.monthlyRent,
-        move_in_date: formData.moveInDate,
-        is_active: true,
+        move_in_date: formData.moveInDate || null,
       })
 
-      success(`${formData.name.trim()} added successfully!`, 'Tenant Created')
-      onRenterAdded()
+      success('Tenant details updated successfully!', 'Profile Updated')
+      onRenterUpdated(updated)
+      onClose()
     } catch (err: unknown) {
-      console.error('Error adding renter:', err)
-      error(err instanceof Error ? err.message : 'Failed to add tenant', 'Error')
+      console.error('Error updating renter profile:', err)
+      error(err instanceof Error ? err.message : 'Failed to update tenant details', 'Update Error')
     } finally {
       setIsLoading(false)
     }
@@ -66,8 +72,8 @@ export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModa
         {/* Header */}
         <div className="flex justify-between items-center mb-6">
           <div>
-            <h2 className="text-xl font-black text-gray-900 tracking-tight">Add New Tenant</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Onboard a tenant to manage monthly rent & utility bills</p>
+            <h2 className="text-xl font-black text-gray-900 tracking-tight">Edit Tenant Profile</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Update contact details, rent amount, and property unit</p>
           </div>
           <button
             onClick={onClose}
@@ -90,7 +96,7 @@ export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModa
                 name="name"
                 value={formData.name}
                 onChange={handleChange}
-                placeholder="e.g. Rahul Sharma"
+                placeholder="Full Name"
                 className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm text-gray-900 focus:bg-white focus:outline-hidden focus:border-blue-500 focus:ring-3 focus:ring-blue-100 font-medium transition-all"
                 required
               />
@@ -124,7 +130,7 @@ export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModa
             {/* Move-in Date */}
             <div>
               <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wider">
-                Move-in Date *
+                Move-in Date
               </label>
               <div className="relative">
                 <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -134,31 +140,50 @@ export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModa
                   value={formData.moveInDate}
                   onChange={handleChange}
                   className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm text-gray-900 focus:bg-white focus:outline-hidden focus:border-blue-500 focus:ring-3 focus:ring-blue-100 font-medium transition-all"
-                  required
                 />
               </div>
             </div>
           </div>
 
-          {/* Contact Phone Number */}
-          <div>
-            <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wider">
-              Phone Number (For WhatsApp Invoices)
-            </label>
-            <div className="relative">
-              <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <input
-                type="tel"
-                name="phone"
-                value={formData.phone}
-                onChange={handleChange}
-                placeholder="e.g. 9876543210"
-                className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm text-gray-900 focus:bg-white focus:outline-hidden focus:border-blue-500 focus:ring-3 focus:ring-blue-100 font-medium transition-all"
-              />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Contact Phone */}
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wider">
+                Phone Number (WhatsApp)
+              </label>
+              <div className="relative">
+                <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="tel"
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleChange}
+                  placeholder="e.g. 9876543210"
+                  className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm text-gray-900 focus:bg-white focus:outline-hidden focus:border-blue-500 focus:ring-3 focus:ring-blue-100 font-medium transition-all"
+                />
+              </div>
+            </div>
+
+            {/* Email */}
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wider">
+                Email Address
+              </label>
+              <div className="relative">
+                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  placeholder="e.g. rahul@example.com"
+                  className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm text-gray-900 focus:bg-white focus:outline-hidden focus:border-blue-500 focus:ring-3 focus:ring-blue-100 font-medium transition-all"
+                />
+              </div>
             </div>
           </div>
 
-          {/* Property Address / Flat No */}
+          {/* Property Unit Address */}
           <div>
             <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wider">
               Property Unit / Flat Address
@@ -193,7 +218,7 @@ export default function AddRenterModal({ onClose, onRenterAdded }: AddRenterModa
               {isLoading ? (
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
               ) : (
-                'Create Tenant'
+                'Save Profile Changes'
               )}
             </button>
           </div>

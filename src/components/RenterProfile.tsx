@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { format } from 'date-fns'
-import { ArrowLeft, Send, Trash2, Archive, MoreVertical } from 'lucide-react'
+import { ArrowLeft, Send, Trash2, Archive, MoreVertical, Edit3, Check, Save } from 'lucide-react'
 import { Renter, MonthlyBillData, AdditionalExpenseData, BillPaymentData } from '@/types'
 import { ApiService } from '@/services/apiService'
 import { billCache as sharedBillCache } from '@/utils/billCache'
 import { aggregateMonthlyBill } from '@/utils/billingCalculations'
+import { useToast } from '@/contexts/ToastContext'
 
 import { BillOverviewCard } from './renter-profile/BillOverviewCard'
 import { ElectricityMeterForm } from './renter-profile/ElectricityMeterForm'
@@ -14,6 +15,7 @@ import { MotorMeterForm } from './renter-profile/MotorMeterForm'
 import { ExpenseManager, AdditionalExpense } from './renter-profile/ExpenseManager'
 import { PaymentHistoryList, PaymentItem } from './renter-profile/PaymentHistoryList'
 import { BillShareModal } from './renter-profile/BillShareModal'
+import { EditRenterModal } from './renter-profile/EditRenterModal'
 
 interface RenterProfileProps {
   renter: Renter
@@ -24,14 +26,16 @@ interface RenterProfileProps {
 }
 
 export default function RenterProfile({
-  renter,
+  renter: initialRenter,
   onClose,
   onArchive,
   onUnarchive,
   onDelete,
 }: RenterProfileProps) {
+  const { success, error, info } = useToast()
+  const [renter, setRenter] = useState<Renter>(initialRenter)
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date())
-  const [rentAmount, setRentAmount] = useState<number>(renter.monthly_rent || 0)
+  const [rentAmount, setRentAmount] = useState<number>(initialRenter.monthly_rent || 0)
 
   // Electricity
   const [electricityEnabled, setElectricityEnabled] = useState(false)
@@ -64,6 +68,7 @@ export default function RenterProfile({
 
   // UI State
   const [showShareModal, setShowShareModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
   const [showActionsDropdown, setShowActionsDropdown] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -180,12 +185,13 @@ export default function RenterProfile({
       }
     } catch (err) {
       console.error('Failed to load bill data', err)
+      error('Could not load bill details for this month', 'Load Failed')
     } finally {
       if (activeRequestRef.current === requestId) {
         setIsLoading(false)
       }
     }
-  }, [renter])
+  }, [renter, error])
 
   useEffect(() => {
     loadMonthData(currentMonthNum, currentYearNum)
@@ -249,8 +255,10 @@ export default function RenterProfile({
       }))
 
       await ApiService.saveBillComplete(billPayload, expensesPayload, paymentsPayload)
+      success(`Saved bill for ${format(selectedMonth, 'MMMM yyyy')}!`, 'Bill Saved')
     } catch (err) {
       console.error('Failed to save bill', err)
+      error('Failed to save bill changes to server', 'Save Error')
     } finally {
       setIsSaving(false)
     }
@@ -283,69 +291,91 @@ export default function RenterProfile({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50/50 pb-16">
-      {/* Sticky Header */}
-      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 sm:px-6 py-4 shadow-sm">
+    <div className="min-h-screen bg-gray-50/60 pb-16">
+      {/* Sticky Top Header */}
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-200/80 px-4 sm:px-6 py-3.5 shadow-xs">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
-              className="p-2 -ml-2 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+              className="p-2 -ml-2 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors cursor-pointer"
+              title="Return to Dashboard"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold text-gray-900">{renter.name}</h1>
+                <h1 className="text-lg sm:text-xl font-black text-gray-900 tracking-tight">{renter.name}</h1>
+                <button
+                  onClick={() => setShowEditModal(true)}
+                  className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                  title="Edit Tenant Details"
+                >
+                  <Edit3 className="w-4 h-4" />
+                </button>
                 <span
-                  className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${
+                  className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full ${
                     renter.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'
                   }`}
                 >
-                  {renter.is_active ? 'Active Tenant' : 'Archived'}
+                  {renter.is_active ? 'Active' : 'Archived'}
                 </span>
               </div>
-              {renter.property_address && (
-                <p className="text-xs text-gray-500">{renter.property_address}</p>
-              )}
+              <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                {renter.property_address && <span>{renter.property_address}</span>}
+                {renter.property_address && renter.phone && <span>•</span>}
+                {renter.phone && <span>{renter.phone}</span>}
+              </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowShareModal(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-all"
+              className="flex items-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-2xl shadow-sm transition-all cursor-pointer"
             >
               <Send className="w-4 h-4" />
-              Share Invoice
+              <span className="hidden sm:inline">Share</span> Invoice
             </button>
 
             <button
               onClick={handleSaveBill}
               disabled={isSaving}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-all disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-2xl shadow-sm transition-all disabled:opacity-50 cursor-pointer"
             >
-              {isSaving ? 'Saving...' : 'Save Changes'}
+              <Save className="w-4 h-4" />
+              {isSaving ? 'Saving...' : 'Save'}
             </button>
 
             {/* Actions Menu */}
             <div className="relative">
               <button
                 onClick={() => setShowActionsDropdown(!showActionsDropdown)}
-                className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-xl"
+                className="p-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 rounded-xl cursor-pointer"
               >
                 <MoreVertical className="w-5 h-5" />
               </button>
 
               {showActionsDropdown && (
-                <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-1.5 z-40">
+                <div className="absolute right-0 mt-2 w-48 bg-white rounded-2xl shadow-xl border border-gray-100 py-1.5 z-40">
+                  <button
+                    onClick={() => {
+                      setShowActionsDropdown(false)
+                      setShowEditModal(true)
+                    }}
+                    className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer"
+                  >
+                    <Edit3 className="w-4 h-4 text-gray-500" />
+                    Edit Profile Details
+                  </button>
+
                   {renter.is_active ? (
                     <button
                       onClick={() => {
                         setShowActionsDropdown(false)
                         onArchive?.(String(renter.id))
                       }}
-                      className="flex items-center gap-2 w-full px-4 py-2 text-xs font-medium text-amber-700 hover:bg-amber-50"
+                      className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 cursor-pointer"
                     >
                       <Archive className="w-4 h-4" />
                       Archive Tenant
@@ -356,24 +386,26 @@ export default function RenterProfile({
                         setShowActionsDropdown(false)
                         onUnarchive?.(String(renter.id))
                       }}
-                      className="flex items-center gap-2 w-full px-4 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                      className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 cursor-pointer"
                     >
                       <Archive className="w-4 h-4" />
-                      Unarchive Tenant
+                      Restore Tenant
                     </button>
                   )}
+
+                  <div className="border-t border-gray-100 my-1"></div>
 
                   <button
                     onClick={() => {
                       setShowActionsDropdown(false)
-                      if (confirm(`Are you sure you want to delete ${renter.name}?`)) {
+                      if (confirm(`Are you sure you want to delete ${renter.name} and all associated billing records?`)) {
                         onDelete?.(String(renter.id))
                       }
                     }}
-                    className="flex items-center gap-2 w-full px-4 py-2 text-xs font-medium text-red-600 hover:bg-red-50"
+                    className="flex items-center gap-2 w-full px-4 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 cursor-pointer"
                   >
                     <Trash2 className="w-4 h-4" />
-                    Delete Renter Record
+                    Delete Record
                   </button>
                 </div>
               )}
@@ -478,6 +510,18 @@ export default function RenterProfile({
             note: p.note,
           }))}
           onClose={() => setShowShareModal(false)}
+        />
+      )}
+
+      {/* Edit Tenant Details Modal */}
+      {showEditModal && (
+        <EditRenterModal
+          renter={renter}
+          onClose={() => setShowEditModal(false)}
+          onRenterUpdated={(updated) => {
+            setRenter(updated)
+            setRentAmount(updated.monthly_rent)
+          }}
         />
       )}
     </div>
