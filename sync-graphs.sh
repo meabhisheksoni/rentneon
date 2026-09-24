@@ -28,8 +28,8 @@ show_menu() {
     echo "[3] Full Rebuild Both Graphs"
     echo "[4] Sync CBM Only"
     echo "[5] Sync CRG Only"
-    echo "[6] Launch CBM Visualizer"
-    echo "[7] Generate & View CRG Interactive Graph"
+    echo "[6] Launch CBM Visualizer (Web UI)"
+    echo "[7] Generate & View CRG Interactive Graph (HTML)"
     echo "[8] Exit"
     echo ""
 }
@@ -100,11 +100,50 @@ while true; do
             read -rp "Press Enter to continue..."
             ;;
         6)
-            [ -n "$CBM_EXE" ] && "$CBM_EXE" --ui=true --port=9749
+            echo ""
+            echo "==================================================="
+            echo "Starting CBM Visualizer Web Server..."
+            if [ -n "$CBM_EXE" ]; then
+                # Start CBM in background with UI enabled on port 9749
+                pkill -f "codebase-memory-mcp --ui=true" 2>/dev/null || true
+                nohup "$CBM_EXE" --ui=true --port=9749 > /tmp/cbm_ui.log 2>&1 &
+                sleep 1
+                echo ""
+                echo "[OK] CBM Visualizer is LIVE at:"
+                echo "     👉 http://localhost:9749"
+                echo ""
+                echo "To view in VS Code:"
+                echo "  1. Press Ctrl+Shift+P -> 'Simple Browser: Show'"
+                echo "  2. Enter: http://localhost:9749"
+                echo "  Or check the VS Code Ports tab for port 9749."
+            else
+                echo "[SKIP] CBM : NOT FOUND"
+            fi
+            echo "==================================================="
             read -rp "Press Enter to continue..."
             ;;
         7)
-            [ -n "$CRG_EXE" ] && "$CRG_EXE" visualize
+            echo ""
+            echo "==================================================="
+            echo "Generating CRG Interactive HTML Graph..."
+            if [ -n "$CRG_EXE" ]; then
+                "$CRG_EXE" visualize
+                # Start preview server on port 8080 if not running
+                if ! pgrep -f "http.server 8080" > /dev/null 2>&1; then
+                    nohup python3 -m http.server 8080 --directory "$REPO_ROOT/.code-review-graph" > /dev/null 2>&1 &
+                fi
+                echo ""
+                echo "[OK] CRG Graph is ready at:"
+                echo "     👉 http://localhost:8080/graph.html"
+                echo "     File: $REPO_ROOT/.code-review-graph/graph.html"
+                echo ""
+                echo "To view in VS Code:"
+                echo "  1. Press Ctrl+Shift+P -> 'Simple Browser: Show'"
+                echo "  2. Enter: http://localhost:8080/graph.html"
+            else
+                echo "[SKIP] CRG : NOT FOUND"
+            fi
+            echo "==================================================="
             read -rp "Press Enter to continue..."
             ;;
         8)
